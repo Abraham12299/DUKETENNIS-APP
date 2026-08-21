@@ -107,18 +107,6 @@ body {
   cursor: pointer;
 }
 
-.auth-links {
-  margin-top: 16px;
-  font-size: 0.85rem;
-  color: var(--gray-600);
-}
-
-.auth-links a {
-  color: var(--blue);
-  cursor: pointer;
-  text-decoration: none;
-}
-
 #onboardingOverlay {
   position: fixed;
   top: 0;
