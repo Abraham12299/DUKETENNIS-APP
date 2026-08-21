@@ -63,6 +63,19 @@ body {
   margin-bottom: 28px;
 }
 
+.email-signin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.email-signin-form input {
+  padding: 14px;
+  border: 2px solid var(--gray-200);
+  border-radius: var(--radius);
+  font-size: 1rem;
+}
+
 .btn-primary {
   background: var(--ball);
   color: var(--black);
