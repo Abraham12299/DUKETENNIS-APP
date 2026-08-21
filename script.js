@@ -26,8 +26,8 @@ let userProfile = null;
 let currentScreen = 'dashboard';
 let currentConversationId = null;
 let allUsersCache = [];
-let currentAttendanceMonth = new Date().toISOString().slice(0,7); // YYYY-MM
-let clientAttendanceMonth = new Date().toISOString().slice(0,7); // Client dashboard month
+let currentAttendanceMonth = new Date().toISOString().slice(0,7);
+let clientAttendanceMonth = new Date().toISOString().slice(0,7);
 
 // ===================== UTILITY FUNCTIONS =====================
 function formatDate(dateStr) {
@@ -51,9 +51,7 @@ function getDecayedPoints(points, lastActive) {
   return Math.max(0, Math.round(points * Math.pow(0.9, extraWeeks)));
 }
 
-// ===================== AUTH (Google + Email/Password) =====================
-
-// Google Sign-In
+// ===================== GOOGLE SIGN-IN =====================
 document.getElementById('googleSignInBtn').addEventListener('click', async () => {
   const provider = new firebase.auth.GoogleAuthProvider();
   try {
@@ -64,61 +62,9 @@ document.getElementById('googleSignInBtn').addEventListener('click', async () =>
   }
 });
 
-// Email/Password Sign-In
-document.getElementById('showSignUp').addEventListener('click', () => {
-  document.getElementById('signInForm').style.display = 'none';
-  document.getElementById('signUpForm').style.display = 'flex';
-  document.getElementById('resetForm').style.display = 'none';
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  await auth.signOut();
 });
-document.getElementById('showSignInFromSignUp').addEventListener('click', () => {
-  document.getElementById('signInForm').style.display = 'flex';
-  document.getElementById('signUpForm').style.display = 'none';
-  document.getElementById('resetForm').style.display = 'none';
-});
-document.getElementById('showReset').addEventListener('click', () => {
-  document.getElementById('signInForm').style.display = 'none';
-  document.getElementById('signUpForm').style.display = 'none';
-  document.getElementById('resetForm').style.display = 'flex';
-});
-document.getElementById('showSignInFromReset').addEventListener('click', () => {
-  document.getElementById('signInForm').style.display = 'flex';
-  document.getElementById('signUpForm').style.display = 'none';
-  document.getElementById('resetForm').style.display = 'none';
-});
-
-document.getElementById('signInBtn').addEventListener('click', async () => {
-  const email = document.getElementById('emailInput').value.trim();
-  const password = document.getElementById('passwordInput').value;
-  if (!email || !password) return alert('Please enter email and password.');
-  try { await auth.signInWithEmailAndPassword(email, password); }
-  catch (error) { alert('Sign-in failed: ' + error.message); }
-});
-
-document.getElementById('signUpBtn').addEventListener('click', async () => {
-  const name = document.getElementById('signUpName').value.trim();
-  const email = document.getElementById('signUpEmail').value.trim();
-  const password = document.getElementById('signUpPassword').value;
-  if (!name || !email || !password) return alert('Please fill in all fields.');
-  if (password.length < 6) return alert('Password must be at least 6 characters.');
-  try {
-    await auth.createUserWithEmailAndPassword(email, password);
-    await auth.currentUser.updateProfile({ displayName: name });
-  } catch (error) { alert('Sign-up failed: ' + error.message); }
-});
-
-document.getElementById('resetBtn').addEventListener('click', async () => {
-  const email = document.getElementById('resetEmail').value.trim();
-  if (!email) return alert('Please enter your email address.');
-  try {
-    await auth.sendPasswordResetEmail(email);
-    alert('Password reset email sent. Check your inbox.');
-    document.getElementById('signInForm').style.display = 'flex';
-    document.getElementById('signUpForm').style.display = 'none';
-    document.getElementById('resetForm').style.display = 'none';
-  } catch (error) { alert('Failed to send reset email: ' + error.message); }
-});
-
-document.getElementById('logoutBtn').addEventListener('click', async () => { await auth.signOut(); });
 
 auth.onAuthStateChanged(async (user) => {
   if (user) {
