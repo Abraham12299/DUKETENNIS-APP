@@ -19,7 +19,7 @@ const ADMIN_EMAILS = [
 // EmailJS configuration – replace with your own keys
 const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID';
 const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';
-const EMAILJS_PUBLIC_KEY = 'YOUR_PUBLIC_KEY';
+const EMAILJS_PUBLIC_KEY = 'ZYUhrEZYAlfaAgGQh'; // <-- Your Public Key
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -34,7 +34,7 @@ let currentConversationId = null;
 let allUsersCache = [];
 let currentAttendanceMonth = new Date().toISOString().slice(0,7);
 let clientAttendanceMonth = new Date().toISOString().slice(0,7);
-let messagingTab = 'chats'; // 'chats', 'groups', 'contacts', 'profile'
+let messagingTab = 'chats';
 
 // ===================== UTILITY FUNCTIONS =====================
 function formatDate(dateStr) {
@@ -335,7 +335,9 @@ function getMonthlyFee(weeklySessions) {
   return 0;
 }
 
-// ===================== BOOKING FORM =====================
+// ===================== BOOKING FORM with Date Picker =====================
+let selectedBookingDate = null; // stores selected date from horizontal picker
+
 async function renderBookingForm(container) {
   const now = new Date();
   const weekStart = new Date(now);
@@ -373,7 +375,23 @@ async function renderBookingForm(container) {
     canBook = false;
   }
 
+  // Generate horizontal date picker (7 days from today)
+  const datePickerHtml = generateDatePicker();
+
   container.innerHTML = `
+    <div class="date-picker-container">
+      <div class="date-picker-header">
+        <h3>Tennis Action Now</h3>
+        <div class="date-picker-nav">
+          <button onclick="changeDatePickerWeek(-1)">◀</button>
+          <button onclick="changeDatePickerWeek(1)">▶</button>
+        </div>
+      </div>
+      <div class="date-picker-strip" id="datePickerStrip">
+        ${datePickerHtml}
+      </div>
+    </div>
+
     <div class="card">
       <h3>Book a Session</h3>
       <p>Weekly bookings: ${weeklyCount} / ${weeklyLimit}</p>
@@ -392,6 +410,17 @@ async function renderBookingForm(container) {
       </form>
     </div>
   `;
+
+  // Attach click events to date pills
+  document.querySelectorAll('.date-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('.date-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const date = pill.dataset.date;
+      selectedBookingDate = date;
+      document.getElementById('bookingDate').value = date;
+    });
+  });
 
   document.getElementById('bookingForm').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -440,6 +469,32 @@ async function renderBookingForm(container) {
     } catch (error) { alert('Failed: ' + error.message); }
   });
 }
+
+// Helper to generate 7 date pills
+function generateDatePicker() {
+  const today = new Date();
+  const dates = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const dayName = d.toLocaleDateString('en-GH', { weekday: 'short' });
+    const dateNum = d.getDate();
+    const dateStr = d.toISOString().split('T')[0];
+    dates.push(`
+      <div class="date-pill ${i === 0 ? 'active' : ''}" data-date="${dateStr}">
+        <div class="day">${dayName}</div>
+        <div class="date">${dateNum}</div>
+        <div class="indicator"></div>
+      </div>
+    `);
+  }
+  return dates.join('');
+}
+
+window.changeDatePickerWeek = function(offset) {
+  // Not fully implemented – would shift the 7-day window
+  alert('Week navigation not implemented yet.');
+};
 
 // ===================== MY BOOKINGS =====================
 async function renderMyBookings(container) {
