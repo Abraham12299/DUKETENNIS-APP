@@ -375,6 +375,56 @@ body.dark-mode .chat-container { background: var(--card-dark); }
 .messaging-sub-btn { background: none; border: none; color: var(--gray-600); font-weight: 600; padding: 8px 16px; border-radius: var(--pill-radius); cursor: pointer; transition: all var(--transition); }
 .messaging-sub-btn.active { background: var(--ball); color: var(--text-light); }
 
+/* Live Scoreboard Styles */
+.live-admin-card {
+  background: var(--card-light);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  margin-bottom: 20px;
+}
+body.dark-mode .live-admin-card { background: var(--card-dark); }
+.live-room-code {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--ball);
+}
+.live-scoreboard {
+  background: #0a1f14;
+  color: white;
+  border-radius: 24px;
+  padding: 20px;
+  margin-bottom: 20px;
+  font-family: 'Courier New', monospace;
+}
+.live-scoreboard .team {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+}
+.live-scoreboard .team-name {
+  font-size: 1.2rem;
+  font-weight: bold;
+}
+.live-scoreboard .team-score {
+  font-size: 2rem;
+  font-weight: 800;
+}
+.live-scoreboard .sets {
+  font-size: 1rem;
+  opacity: 0.7;
+}
+.live-scoreboard .serving-badge {
+  background: var(--ball);
+  color: black;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
 /* Animations */
 @keyframes fadeIn {
   from { opacity: 0; }
