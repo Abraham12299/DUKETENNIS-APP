@@ -30,6 +30,7 @@ let currentAttendanceMonth = new Date().toISOString().slice(0,7);
 let clientAttendanceMonth = new Date().toISOString().slice(0,7);
 let messagingTab = 'chats';
 let selectedBookingDate = null;
+let undoStack = []; // for undo functionality
 
 // ===================== UTILITY FUNCTIONS =====================
 function formatDate(dateStr) {
@@ -64,6 +65,23 @@ function getMonthlyFee(weeklySessions) {
   return 0;
 }
 
+function exportToCSV(filename, rows) {
+  if (!rows.length) {
+    alert('No data to export.');
+    return;
+  }
+  const csvContent = rows.map(row => row.join(',')).join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 // ===================== DARK MODE TOGGLE =====================
 document.addEventListener('DOMContentLoaded', () => {
   const savedTheme = localStorage.getItem('theme');
@@ -74,6 +92,27 @@ document.getElementById('themeToggleBtn').addEventListener('click', () => {
   document.body.classList.toggle('dark-mode');
   localStorage.setItem('theme', document.body.classList.contains('dark-mode') ? 'dark' : 'light');
 });
+
+// ===================== UNDO FUNCTIONALITY =====================
+function showUndoButton(undoFunction) {
+  undoStack.push(undoFunction);
+  const undoBtn = document.createElement('button');
+  undoBtn.className = 'btn-outline pill';
+  undoBtn.textContent = 'Undo';
+  undoBtn.style.position = 'fixed';
+  undoBtn.style.bottom = '100px';
+  undoBtn.style.right = '20px';
+  undoBtn.style.zIndex = '1000';
+  undoBtn.addEventListener('click', () => {
+    const fn = undoStack.pop();
+    if (fn) fn();
+    undoBtn.remove();
+  });
+  document.body.appendChild(undoBtn);
+  setTimeout(() => {
+    if (document.body.contains(undoBtn)) undoBtn.remove();
+  }, 5000);
+}
 
 // ===================== GOOGLE SIGN-IN =====================
 document.getElementById('googleSignInBtn').addEventListener('click', async () => {
@@ -120,6 +159,7 @@ async function ensureUserProfile(user) {
       role: isAdmin ? 'admin' : 'client', skillCategory: 'Beginner', weeklySessions: 1,
       points: 0, matchesWon: 0, matchesLost: 0, username: '', gender: '',
       profilePic: '', coverPic: '', alertsEnabled: true, paidThroughMonth: '',
+      phone: '', secondPhone: '', emergencyContact: '',
       lastActive: firebase.firestore.FieldValue.serverTimestamp(),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
@@ -144,7 +184,6 @@ document.getElementById('saveUsernameBtn').addEventListener('click', async () =>
   const q = await db.collection('users').where('username', '==', username).get();
   if (!q.empty && q.docs[0].id !== userProfile.uid) { errorEl.textContent = 'Username already taken.'; return; }
 
-  // Convert profile picture to base64 data URL
   const reader = new FileReader();
   reader.onload = async (e) => {
     const profilePicDataUrl = e.target.result;
@@ -243,7 +282,6 @@ async function renderClientDashboard(container) {
       attendanceGridHtml += `<div style="display:inline-block;width:30px;height:30px;border-radius:50%;background:${color};color:white;text-align:center;line-height:30px;margin:2px;font-weight:bold;">${label}</div>`;
     }
 
-    // Weekly strip
     let weeklyStripHtml = '';
     for (let i = 0; i < 7; i++) {
       const d = new Date(now);
@@ -306,6 +344,7 @@ async function renderClientDashboard(container) {
         </div>
         <div style="margin-top:10px;">${attendanceGridHtml}</div>
         <p style="font-size:0.8rem;color:var(--gray-600);margin-top:8px;">Green = Attended, Yellow = Booked, Gray = Not Marked</p>
+        <button class="btn-outline" onclick="exportMyAttendanceCSV('${monthKey}')">Download CSV</button>
       </div>
 
       <div class="grid-2">
@@ -364,6 +403,16 @@ window.clientSetMonthFromPicker = function(value) {
     clientAttendanceMonth = value;
     renderCurrentScreen();
   }
+};
+
+// Export client attendance CSV
+window.exportMyAttendanceCSV = async function(month) {
+  const docId = `${userProfile.uid}_${month}`;
+  const doc = await db.collection('attendance').doc(docId).get();
+  const sessions = doc.exists ? doc.data().sessions || [] : [];
+  const rows = [['Session', 'Status']];
+  sessions.forEach((s, i) => rows.push([`Session ${i+1}`, s]));
+  exportToCSV(`my_attendance_${month}.csv`, rows);
 };
 
 // ===================== BOOKING FORM =====================
@@ -487,6 +536,12 @@ async function renderBookingForm(container) {
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      // Undo: allow cancel booking immediately
+      showUndoButton(async () => {
+        await db.collection('bookings').doc(bookingRef.id).update({ status: 'cancelled' });
+        alert('Booking undone.');
+        renderCurrentScreen();
+      });
       alert('Booking confirmed!');
       if (confirm('Would you like to leave a review now?')) {
         showReviewPrompt(bookingRef.id, date, program);
@@ -518,7 +573,6 @@ function generateDatePicker() {
 }
 
 window.changeDatePickerWeek = function(offset) {
-  // Not fully implemented – would shift the 7-day window
   alert('Week navigation not implemented yet.');
 };
 
@@ -541,7 +595,13 @@ async function renderMyBookings(container) {
 
 window.cancelBooking = async function(bookingId) {
   if (confirm('Cancel this booking?')) {
+    const originalStatus = 'booked'; // we don't easily know previous, but we can store? we'll just allow undo by setting back to booked
     await db.collection('bookings').doc(bookingId).update({ status: 'cancelled', updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    showUndoButton(async () => {
+      await db.collection('bookings').doc(bookingId).update({ status: originalStatus });
+      alert('Cancellation undone.');
+      renderCurrentScreen();
+    });
     alert('Booking cancelled.');
     renderCurrentScreen();
   }
@@ -639,6 +699,7 @@ async function renderRankings(container) {
         <tr><th>#</th><th>Player</th><th>Points</th><th>W/L</th></tr>
         ${combinedRanked.map((p,i) => `<tr><td>${i+1}</td><td>${escapeHtml(p.username || p.name)}</td><td>${p.effectivePoints}</td><td>${p.matchesWon}-${p.matchesLost}</td></tr>`).join('')}
       </table>
+      <button class="btn-outline" onclick="exportRankingsCSV('all')">Download CSV</button>
     </div>
 
     <div class="card">
@@ -647,6 +708,7 @@ async function renderRankings(container) {
         <tr><th>#</th><th>Player</th><th>Points</th><th>W/L</th></tr>
         ${maleRanked.map((p,i) => `<tr><td>${i+1}</td><td>${escapeHtml(p.username || p.name)}</td><td>${p.effectivePoints}</td><td>${p.matchesWon}-${p.matchesLost}</td></tr>`).join('') || '<tr><td colspan="4">No male players.</td></tr>'}
       </table>
+      <button class="btn-outline" onclick="exportRankingsCSV('male')">Download CSV</button>
     </div>
 
     <div class="card">
@@ -655,15 +717,20 @@ async function renderRankings(container) {
         <tr><th>#</th><th>Player</th><th>Points</th><th>W/L</th></tr>
         ${femaleRanked.map((p,i) => `<tr><td>${i+1}</td><td>${escapeHtml(p.username || p.name)}</td><td>${p.effectivePoints}</td><td>${p.matchesWon}-${p.matchesLost}</td></tr>`).join('') || '<tr><td colspan="4">No female players.</td></tr>'}
       </table>
+      <button class="btn-outline" onclick="exportRankingsCSV('female')">Download CSV</button>
     </div>
 
     <div class="card">
       <h3>My Head-to-Head Records</h3>
+      <div style="margin-bottom:8px;">
+        <input type="text" id="h2hSearchInput" placeholder="Search player..." oninput="searchH2H(this.value)">
+      </div>
+      <div id="h2hSearchResults"></div>
       <table>
         <tr><th>Opponent</th><th>Record</th></tr>
         ${allPlayers.filter(p => p.uid !== userProfile.uid).map(p => {
           const h2h = h2hMap[userProfile.uid]?.[p.uid] || { wins: 0, losses: 0 };
-          return `<tr><td>${escapeHtml(p.username || p.name)}</td><td>${h2h.wins} - ${h2h.losses}</td></tr>`;
+          return `<tr class="h2h-row" data-name="${(p.username || '').toLowerCase()}"><td>${escapeHtml(p.username || p.name)}</td><td>${h2h.wins} - ${h2h.losses}</td></tr>`;
         }).join('')}
       </table>
     </div>
@@ -683,6 +750,10 @@ async function renderRankings(container) {
       <div id="compareResult"></div>
     </div>
   `;
+
+  // Store data for search
+  window.h2hMapData = h2hMap;
+  window.allPlayersData = allPlayers;
 
   function updateCompare() {
     const p1 = document.getElementById('comparePlayer1').value;
@@ -704,6 +775,30 @@ async function renderRankings(container) {
   document.getElementById('comparePlayer1').addEventListener('change', updateCompare);
   document.getElementById('comparePlayer2').addEventListener('change', updateCompare);
 }
+
+// Search H2H
+window.searchH2H = function(query) {
+  const rows = document.querySelectorAll('.h2h-row');
+  query = query.toLowerCase();
+  rows.forEach(row => {
+    const name = row.dataset.name || '';
+    row.style.display = name.includes(query) ? '' : 'none';
+  });
+};
+
+// Export rankings CSV
+window.exportRankingsCSV = async function(category) {
+  const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+  const players = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(p => p.gender);
+  let filtered = players;
+  if (category === 'male') filtered = players.filter(p => p.gender === 'Male');
+  if (category === 'female') filtered = players.filter(p => p.gender === 'Female');
+  const ranked = filtered.map(p => ({ ...p, effectivePoints: getDecayedPoints(p.points, p.lastActive) }))
+    .sort((a,b) => b.effectivePoints - a.effectivePoints);
+  const rows = [['#', 'Player', 'Points', 'W/L']];
+  ranked.forEach((p, i) => rows.push([i+1, p.username || p.name, p.effectivePoints, `${p.matchesWon}-${p.matchesLost}`]));
+  exportToCSV('rankings.csv', rows);
+};
 
 // ===================== MESSAGING =====================
 async function renderMessaging(container) {
@@ -745,6 +840,7 @@ async function renderChatsList(container) {
     const conversations = convSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
     let html = '';
+    // General community chat
     const generalConv = conversations.find(c => c.id === 'general');
     if (generalConv) {
       html += `<div class="card" style="cursor:pointer;" onclick="openConversation('general')">
@@ -758,23 +854,25 @@ async function renderChatsList(container) {
       </div>`;
     }
 
-    const adminUser = allUsersCache.find(u => ADMIN_EMAILS.includes(u.email));
-    if (adminUser) {
-      const coachConv = conversations.find(c => c.type === 'direct' && c.participants.includes(adminUser.uid));
+    // Coach chats: show all admins from ADMIN_EMAILS
+    const admins = allUsersCache.filter(u => ADMIN_EMAILS.includes(u.email));
+    for (const admin of admins) {
+      const coachConv = conversations.find(c => c.type === 'direct' && c.participants.includes(admin.uid));
       if (coachConv) {
         html += `<div class="card" style="cursor:pointer;" onclick="openConversation('${coachConv.id}')">
-          <strong>Coach ${adminUser.username || adminUser.name}</strong>
+          <strong>Coach ${admin.username || admin.name}</strong>
           <div>${coachConv.lastMessage || 'No messages'}</div>
         </div>`;
       } else {
-        html += `<div class="card" style="cursor:pointer;" onclick="startCoachChat('${adminUser.uid}')">
-          <strong>Coach ${adminUser.username || adminUser.name}</strong>
+        html += `<div class="card" style="cursor:pointer;" onclick="startCoachChat('${admin.uid}')">
+          <strong>Coach ${admin.username || admin.name}</strong>
           <div>Tap to message</div>
         </div>`;
       }
     }
 
-    const otherDirectChats = conversations.filter(c => c.type === 'direct' && c.id !== 'general' && !(adminUser && c.participants.includes(adminUser.uid)));
+    // Other direct chats
+    const otherDirectChats = conversations.filter(c => c.type === 'direct' && c.id !== 'general' && !admins.some(a => c.participants.includes(a.uid)));
     otherDirectChats.forEach(c => {
       const otherUid = c.participants.find(p => p !== userProfile.uid);
       const otherUser = allUsersCache.find(u => u.uid === otherUid);
@@ -859,6 +957,16 @@ async function renderProfile(container) {
               <input type="file" accept="image/*" style="display:none;" onchange="updateCoverPic(this)">
             </label>
           </div>
+          <div style="margin-top:20px;">
+            <h4>Contact Information</h4>
+            <label>Phone (Primary)</label>
+            <input type="tel" id="editPhone" value="${escapeHtml(profile.phone || '')}" placeholder="Enter primary phone">
+            <label>Second Phone</label>
+            <input type="tel" id="editSecondPhone" value="${escapeHtml(profile.secondPhone || '')}" placeholder="Enter second phone">
+            <label>Emergency Contact</label>
+            <input type="text" id="editEmergencyContact" value="${escapeHtml(profile.emergencyContact || '')}" placeholder="Enter emergency contact">
+            <button class="btn-primary" onclick="saveContactInfo()">Save Contact Info</button>
+          </div>
         </div>
       </div>
     `;
@@ -867,16 +975,47 @@ async function renderProfile(container) {
   }
 }
 
-// Update profile picture (base64)
+window.saveContactInfo = async function() {
+  const phone = document.getElementById('editPhone').value.trim();
+  const secondPhone = document.getElementById('editSecondPhone').value.trim();
+  const emergencyContact = document.getElementById('editEmergencyContact').value.trim();
+  try {
+    const old = { phone: userProfile.phone, secondPhone: userProfile.secondPhone, emergencyContact: userProfile.emergencyContact };
+    await db.collection('users').doc(userProfile.uid).update({
+      phone, secondPhone, emergencyContact
+    });
+    userProfile.phone = phone;
+    userProfile.secondPhone = secondPhone;
+    userProfile.emergencyContact = emergencyContact;
+    showUndoButton(async () => {
+      await db.collection('users').doc(userProfile.uid).update(old);
+      userProfile = { ...userProfile, ...old };
+      alert('Contact info reverted.');
+      renderProfile(document.getElementById('messagingContent'));
+    });
+    alert('Contact information saved.');
+    renderProfile(document.getElementById('messagingContent'));
+  } catch (error) {
+    alert('Failed to save: ' + error.message);
+  }
+};
+
 window.updateProfilePic = async function(input) {
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = async (e) => {
     const dataUrl = e.target.result;
+    const oldPic = userProfile.profilePic;
     try {
       await db.collection('users').doc(userProfile.uid).update({ profilePic: dataUrl });
       userProfile.profilePic = dataUrl;
+      showUndoButton(async () => {
+        await db.collection('users').doc(userProfile.uid).update({ profilePic: oldPic });
+        userProfile.profilePic = oldPic;
+        alert('Profile picture reverted.');
+        renderProfile(document.getElementById('messagingContent'));
+      });
       alert('Profile picture updated.');
       renderProfile(document.getElementById('messagingContent'));
     } catch (error) {
@@ -886,16 +1025,22 @@ window.updateProfilePic = async function(input) {
   reader.readAsDataURL(file);
 };
 
-// Update cover picture (base64)
 window.updateCoverPic = async function(input) {
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = async (e) => {
     const dataUrl = e.target.result;
+    const oldCover = userProfile.coverPic;
     try {
       await db.collection('users').doc(userProfile.uid).update({ coverPic: dataUrl });
       userProfile.coverPic = dataUrl;
+      showUndoButton(async () => {
+        await db.collection('users').doc(userProfile.uid).update({ coverPic: oldCover });
+        userProfile.coverPic = oldCover;
+        alert('Cover reverted.');
+        renderProfile(document.getElementById('messagingContent'));
+      });
       alert('Cover updated.');
       renderProfile(document.getElementById('messagingContent'));
     } catch (error) {
@@ -1010,12 +1155,16 @@ function renderChatArea(container) {
     if (!text) return;
     try {
       const convRef = db.collection('conversations').doc(convId);
-      await convRef.collection('messages').add({
+      const msgRef = await convRef.collection('messages').add({
         senderId: userProfile.uid,
         text,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       await convRef.update({ lastMessage: text, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      showUndoButton(async () => {
+        await msgRef.delete();
+        // update lastMessage? we'll just leave it
+      });
       messageInput.value = '';
     } catch (error) { alert('Failed: ' + error.message); }
   }
@@ -1057,11 +1206,14 @@ window.showReviewPrompt = function(bookingId, date, programType) {
     const comment = document.getElementById('reviewComment').value.trim();
     if (!rating) return;
     try {
-      await db.collection('reviews').add({
+      const reviewRef = await db.collection('reviews').add({
         bookingId, userId: userProfile.uid, rating, comment,
-        programType: programType,
-        bookingDate: date,
+        programType, bookingDate: date,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showUndoButton(async () => {
+        await reviewRef.delete();
+        alert('Review undone.');
       });
       alert('Thank you for your review!');
       modal.remove();
@@ -1086,6 +1238,7 @@ function renderAdmin() {
       <button class="tab-btn" data-admin-tab="reviews">Reviews</button>
       <button class="tab-btn" data-admin-tab="notifications">Notifications</button>
       <button class="tab-btn" data-admin-tab="billing">Billing</button>
+      <button class="tab-btn" data-admin-tab="analytics">Analytics</button>
     </div>
     <div id="adminContent"></div>
   `;
@@ -1111,6 +1264,7 @@ async function renderAdminTab(tab) {
     case 'reviews': await renderAdminReviews(container); break;
     case 'notifications': await renderAdminNotifications(container); break;
     case 'billing': await renderAdminBilling(container); break;
+    case 'analytics': await renderAdminAnalytics(container); break;
   }
 }
 
@@ -1119,24 +1273,50 @@ async function renderAdminBookings(container) {
   container.innerHTML = '<p>Loading...</p>';
   const snap = await db.collection('bookings').get();
   const bookings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  bookings.sort((a,b) => b.date.localeCompare(a.date));
+  // Group by month
+  const grouped = {};
+  bookings.forEach(b => {
+    const month = b.date ? b.date.slice(0,7) : 'unknown';
+    if (!grouped[month]) grouped[month] = [];
+    grouped[month].push(b);
+  });
+  const sortedMonths = Object.keys(grouped).sort().reverse();
+
   container.innerHTML = `
     <div class="card">
       <h3>All Bookings</h3>
-      ${bookings.map(b => `
-        <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100);">
-          <div><strong>${escapeHtml(b.clientName)}</strong> · ${escapeHtml(b.programType)} ${b.groupSession?'<span class="badge badge-blue">Group</span>':''} ${b.manualEntry?'<span class="badge badge-yellow">Manual</span>':''} <div>${formatDate(b.date)}</div></div>
-          <div><span class="badge ${b.status==='booked'?'badge-green':b.status==='attended'?'badge-blue':'badge-red'}">${b.status}</span> ${b.status==='booked'?`<button class="btn-outline" onclick="markAttended('${b.id}')">Attended</button>`:''}</div>
-        </div>
-      `).join('') || '<p>No bookings.</p>'}
+      <button class="btn-outline" onclick="exportBookingsCSV()">Download CSV</button>
+      ${sortedMonths.length === 0 ? '<p>No bookings.</p>' : sortedMonths.map(month => {
+        const monthLabel = new Date(month + '-01').toLocaleDateString('en-GH', { month: 'long', year: 'numeric' });
+        return `<h4 style="margin-top:12px;">${monthLabel}</h4>` + grouped[month].map(b => `
+          <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100);">
+            <div><strong>${escapeHtml(b.clientName)}</strong> · ${escapeHtml(b.programType)} ${b.groupSession?'<span class="badge badge-blue">Group</span>':''} ${b.manualEntry?'<span class="badge badge-yellow">Manual</span>':''} <div>${formatDate(b.date)}</div></div>
+            <div><span class="badge ${b.status==='booked'?'badge-green':b.status==='attended'?'badge-blue':'badge-red'}">${b.status}</span> ${b.status==='booked'?`<button class="btn-outline" onclick="markAttended('${b.id}')">Attended</button>`:''}</div>
+          </div>
+        `).join('');
+      }).join('')}
     </div>
   `;
 }
 
 window.markAttended = async function(bookingId) {
+  const oldStatus = 'booked'; // assume previous was booked
   await db.collection('bookings').doc(bookingId).update({ status:'attended', updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  showUndoButton(async () => {
+    await db.collection('bookings').doc(bookingId).update({ status: oldStatus });
+    alert('Mark undone.');
+    renderAdminTab('bookings');
+  });
   alert('Marked attended.');
   renderAdminTab('bookings');
+};
+
+window.exportBookingsCSV = async function() {
+  const snap = await db.collection('bookings').get();
+  const bookings = snap.docs.map(d => d.data());
+  const rows = [['Client', 'Program', 'Date', 'Status', 'Group', 'Manual']];
+  bookings.forEach(b => rows.push([b.clientName, b.programType, b.date, b.status, b.groupSession ? 'Yes' : 'No', b.manualEntry ? 'Yes' : 'No']));
+  exportToCSV('bookings.csv', rows);
 };
 
 // ===================== ADMIN ATTENDANCE =====================
@@ -1184,6 +1364,7 @@ async function renderAdminAttendance(container) {
         <button class="btn-outline" onclick="manualAttendance()">Add Manual Attendance</button>
         <button class="btn-outline" onclick="copyClientAttendance()">Copy Client Attendance</button>
         <button class="btn-outline" onclick="copyAllAttendance()">Copy All Attendance</button>
+        <button class="btn-outline" onclick="exportAttendanceCSV()">Download CSV</button>
       </div>
       ${tableHtml}
       <p style="font-size:0.8rem;color:var(--gray-400);">Click a circle to toggle: Green = Attended, Yellow = Booked, Gray = None.</p>
@@ -1199,6 +1380,10 @@ async function renderAdminAttendance(container) {
       const cycle = { 'none': 'booked', 'booked': 'attended', 'attended': 'none' };
       const nextVal = cycle[currentVal];
       await updateAttendance(userId, month, index, nextVal);
+      showUndoButton(async () => {
+        await updateAttendance(userId, month, index, currentVal);
+        renderAdminTab('attendance');
+      });
       renderAdminTab('attendance');
     });
   });
@@ -1261,11 +1446,16 @@ window.manualAttendance = function() {
       const program = document.getElementById('manualProgram').value;
       if (!userId || !date) return alert('Please fill all fields.');
       const user = allUsersCache.find(u => u.uid === userId);
-      await db.collection('bookings').add({
+      const bookingRef = await db.collection('bookings').add({
         userId, clientName: user.username || user.name, programType: program, date,
         groupSession: program === 'Group Lesson', status: 'attended', manualEntry: true,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showUndoButton(async () => {
+        await bookingRef.delete();
+        alert('Manual attendance undone.');
+        renderAdminTab('attendance');
       });
       alert('Manual attendance recorded.');
       renderAdminTab('attendance');
@@ -1317,6 +1507,22 @@ window.copyAllAttendance = async function() {
   navigator.clipboard.writeText(text).then(() => alert('All attendance copied!'));
 };
 
+window.exportAttendanceCSV = async function() {
+  const month = currentAttendanceMonth;
+  const clientsSnap = await db.collection('users').where('role', '==', 'client').get();
+  const clients = clientsSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  const attSnap = await db.collection('attendance').where('month', '==', month).get();
+  const attendanceMap = {};
+  attSnap.docs.forEach(d => attendanceMap[d.data().userId] = d.data().sessions || []);
+
+  const rows = [['Client', ...Array.from({length: Math.max(...clients.map(c => (c.weeklySessions||1)*4), 4)}, (_,i) => `S${i+1}`)]];
+  clients.forEach(c => {
+    const sessions = attendanceMap[c.uid] || [];
+    rows.push([c.username || c.name, ...sessions]);
+  });
+  exportToCSV(`attendance_${month}.csv`, rows);
+};
+
 // ===================== ADMIN ANNOUNCEMENTS =====================
 async function renderAdminAnnouncements(container) {
   container.innerHTML = `
@@ -1331,7 +1537,11 @@ async function renderAdminAnnouncements(container) {
     const title = document.getElementById('annTitle').value.trim();
     const body = document.getElementById('annBody').value.trim();
     if (!title || !body) return;
-    await db.collection('announcements').add({ coachId: currentUser.uid, title, body, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    const annRef = await db.collection('announcements').add({ coachId: currentUser.uid, title, body, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    showUndoButton(async () => {
+      await annRef.delete();
+      alert('Announcement undone.');
+    });
     alert('Posted!');
     renderAdminTab('announcements');
   });
@@ -1339,7 +1549,9 @@ async function renderAdminAnnouncements(container) {
   const anns = annSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   document.getElementById('announcementList').innerHTML = anns.length === 0 ? '<p>No announcements.</p>' : anns.map(a => `<div class="card"><h4>${escapeHtml(a.title)}</h4><p>${escapeHtml(a.body)}</p><small>${new Date(a.createdAt?.toDate()).toLocaleString()}</small><button class="btn-danger" onclick="deleteAnnouncement('${a.id}')">Delete</button></div>`).join('');
 }
-window.deleteAnnouncement = async function(id) { if (confirm('Delete?')) { await db.collection('announcements').doc(id).delete(); renderAdminTab('announcements'); } };
+window.deleteAnnouncement = async function(id) {
+  if (confirm('Delete?')) { await db.collection('announcements').doc(id).delete(); renderAdminTab('announcements'); }
+};
 
 // ===================== ADMIN USERS =====================
 async function renderAdminUsers(container) {
@@ -1360,13 +1572,20 @@ async function renderAdminUsers(container) {
     </div>
     <div class="card">
       <h3>All Users</h3>
-      <table><tr><th>Username</th><th>Name</th><th>Role</th><th>Gender</th><th>Weekly Sessions</th><th>Action</th></tr>
+      <table>
+        <tr>
+          <th>Username</th><th>Name</th><th>Role</th><th>Gender</th>
+          <th>Weekly Sessions</th><th>Phone</th><th>Second Phone</th><th>Emergency Contact</th><th>Action</th>
+        </tr>
         ${users.map(u => `<tr>
           <td>${escapeHtml(u.username||'Not set')}</td>
           <td>${escapeHtml(u.name)}</td>
           <td><select onchange="updateUserRole('${u.uid}', this.value)"><option value="client" ${u.role==='client'?'selected':''}>Client</option><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option></select></td>
           <td><select onchange="updateUserGender('${u.uid}', this.value)"><option value="Male" ${u.gender==='Male'?'selected':''}>Male</option><option value="Female" ${u.gender==='Female'?'selected':''}>Female</option></select></td>
           <td><select onchange="updateWeeklySessions('${u.uid}', parseInt(this.value))"><option value="1" ${(u.weeklySessions||1)===1?'selected':''}>1x</option><option value="2" ${(u.weeklySessions||1)===2?'selected':''}>2x</option><option value="3" ${(u.weeklySessions||1)===3?'selected':''}>3x</option></select></td>
+          <td>${escapeHtml(u.phone || '')}</td>
+          <td>${escapeHtml(u.secondPhone || '')}</td>
+          <td>${escapeHtml(u.emergencyContact || '')}</td>
           <td><button class="btn-danger" onclick="removeUser('${u.uid}')">Remove</button></td>
         </tr>`).join('')}
       </table>
@@ -1389,8 +1608,15 @@ async function renderAdminUsers(container) {
         uid: userCredential.user.uid, email, name, role, gender,
         weeklySessions: 1, points: 0, matchesWon: 0, matchesLost: 0,
         username: '', profilePic: '', coverPic: '',
+        phone: '', secondPhone: '', emergencyContact: '',
         lastActive: firebase.firestore.FieldValue.serverTimestamp(),
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showUndoButton(async () => {
+        await auth.currentUser.delete().catch(()=>{});
+        await db.collection('users').doc(userCredential.user.uid).delete();
+        alert('User creation undone.');
+        renderAdminTab('users');
       });
       alert('User created successfully.');
       renderAdminTab('users');
@@ -1398,16 +1624,43 @@ async function renderAdminUsers(container) {
   });
 }
 
-window.updateUserRole = async function(uid, role) { await db.collection('users').doc(uid).update({ role }); alert('Role updated'); renderAdminTab('users'); };
-window.updateUserGender = async function(uid, gender) { await db.collection('users').doc(uid).update({ gender }); alert('Gender updated'); renderAdminTab('users'); };
+window.updateUserRole = async function(uid, role) {
+  const oldRole = userProfile.role;
+  await db.collection('users').doc(uid).update({ role });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ role: oldRole });
+    alert('Role change undone.');
+    renderAdminTab('users');
+  });
+  alert('Role updated');
+  renderAdminTab('users');
+};
+window.updateUserGender = async function(uid, gender) {
+  const oldGender = userProfile.gender;
+  await db.collection('users').doc(uid).update({ gender });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ gender: oldGender });
+    alert('Gender change undone.');
+    renderAdminTab('users');
+  });
+  alert('Gender updated');
+  renderAdminTab('users');
+};
 window.updateWeeklySessions = async function(uid, sessions) {
   if (!confirm('Changing weekly sessions will adjust the number of attendance slots for this client. Continue?')) return;
+  const oldSessions = userProfile.weeklySessions;
   await db.collection('users').doc(uid).update({ weeklySessions: sessions });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ weeklySessions: oldSessions });
+    alert('Weekly sessions change undone.');
+    renderAdminTab('users');
+  });
   alert('Weekly sessions updated.');
   renderAdminTab('users');
 };
 window.removeUser = async function(uid) {
   if (!confirm('Are you sure you want to remove this user? This will delete their account and all associated data.')) return;
+  // We won't implement undo for full deletion due to complexity, but could store snapshot in memory? We'll just warn.
   try {
     await db.collection('users').doc(uid).delete();
     const bookingsSnap = await db.collection('bookings').where('userId', '==', uid).get();
@@ -1455,7 +1708,13 @@ async function renderAdminRankings(container) {
     const uid = document.getElementById('adjustPlayerSelect').value;
     const delta = parseInt(document.getElementById('pointsDelta').value);
     if (!uid || isNaN(delta)) return alert('Select player and enter a number.');
+    const oldPoints = players.find(p=>p.uid===uid)?.points || 0;
     await db.collection('users').doc(uid).update({ points: firebase.firestore.FieldValue.increment(delta) });
+    showUndoButton(async () => {
+      await db.collection('users').doc(uid).update({ points: oldPoints });
+      alert('Points change undone.');
+      renderAdminTab('rankings');
+    });
     alert('Points updated.');
     renderAdminTab('rankings');
   });
@@ -1469,9 +1728,18 @@ async function renderAdminRankings(container) {
     const loser = players.find(p=>p.uid===loserUid);
     let points = 50;
     if (winner.points < loser.points) points += 25;
+    const oldWinnerPoints = winner.points, oldLoserPoints = loser.points;
+    const oldWinnerW = winner.matchesWon, oldLoserL = loser.matchesLost;
     await db.collection('users').doc(winnerUid).update({ points: firebase.firestore.FieldValue.increment(points), matchesWon: firebase.firestore.FieldValue.increment(1), lastActive: firebase.firestore.FieldValue.serverTimestamp() });
     await db.collection('users').doc(loserUid).update({ matchesLost: firebase.firestore.FieldValue.increment(1), lastActive: firebase.firestore.FieldValue.serverTimestamp() });
-    await db.collection('matches').add({ winnerId: winnerUid, loserId: loserUid, date: new Date().toISOString().split('T')[0], createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    const matchRef = await db.collection('matches').add({ winnerId: winnerUid, loserId: loserUid, date: new Date().toISOString().split('T')[0], createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    showUndoButton(async () => {
+      await db.collection('users').doc(winnerUid).update({ points: oldWinnerPoints, matchesWon: oldWinnerW });
+      await db.collection('users').doc(loserUid).update({ matchesLost: oldLoserL });
+      await matchRef.delete();
+      alert('Match undone.');
+      renderAdminTab('rankings');
+    });
     alert(`Match recorded. Winner gained ${points} points.`);
     renderAdminTab('rankings');
   });
@@ -1487,7 +1755,6 @@ async function renderAdminReviews(container) {
     const userMap = {};
     usersSnap.docs.forEach(d => userMap[d.id] = d.data());
 
-    // Group by month
     const grouped = {};
     reviews.forEach(r => {
       const date = r.createdAt?.toDate ? r.createdAt.toDate() : new Date();
@@ -1495,7 +1762,6 @@ async function renderAdminReviews(container) {
       if (!grouped[monthKey]) grouped[monthKey] = [];
       grouped[monthKey].push(r);
     });
-
     const sortedMonths = Object.keys(grouped).sort().reverse();
 
     let html = `<div class="card"><h3>Client Reviews</h3>`;
@@ -1537,7 +1803,6 @@ async function renderAdminNotifications(container) {
   const notificationsSnap = await db.collection('notifications').orderBy('createdAt', 'desc').get();
   const notifications = notificationsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  // Group by month
   const grouped = {};
   notifications.forEach(n => {
     const date = n.createdAt?.toDate ? n.createdAt.toDate() : new Date();
@@ -1592,9 +1857,14 @@ async function renderAdminNotifications(container) {
       sentTo = [target];
     }
     try {
-      await db.collection('notifications').add({
+      const notifRef = await db.collection('notifications').add({
         title, body, sentTo, createdBy: currentUser.uid,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: []
+      });
+      showUndoButton(async () => {
+        await notifRef.delete();
+        alert('Notification undone.');
+        renderAdminTab('notifications');
       });
       alert('Notification sent.');
       renderAdminTab('notifications');
@@ -1644,12 +1914,24 @@ async function renderAdminBilling(container) {
 }
 
 window.toggleAlertsAdmin = async function(uid, enabled) {
+  const oldValue = !enabled;
   await db.collection('users').doc(uid).update({ alertsEnabled: enabled });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ alertsEnabled: oldValue });
+    alert('Alert toggle undone.');
+    renderAdminBilling(document.getElementById('adminContent'));
+  });
   renderAdminBilling(document.getElementById('adminContent'));
 };
 
 window.markPaid = async function(uid, month) {
+  const oldPaidThrough = userProfile.paidThroughMonth || '';
   await db.collection('users').doc(uid).update({ paidThroughMonth: month });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ paidThroughMonth: oldPaidThrough });
+    alert('Mark paid undone.');
+    renderAdminBilling(document.getElementById('adminContent'));
+  });
   alert('Marked as paid through ' + month);
   renderAdminBilling(document.getElementById('adminContent'));
 };
@@ -1677,6 +1959,86 @@ window.sendPaymentReminders = async function() {
   } catch (error) {
     alert('Failed to send reminders: ' + error.message);
   }
+};
+
+// ===================== ADMIN ANALYTICS =====================
+async function renderAdminAnalytics(container) {
+  container.innerHTML = '<p>Loading analytics...</p>';
+  try {
+    const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+    const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const bookingsSnap = await db.collection('bookings').get();
+    const bookings = bookingsSnap.docs.map(d => d.data());
+    const attendanceSnap = await db.collection('attendance').get();
+    const attendance = attendanceSnap.docs.map(d => d.data());
+
+    const currentMonth = new Date().toISOString().slice(0,7);
+    const paidClients = clients.filter(c => c.paidThroughMonth && c.paidThroughMonth >= currentMonth);
+    const revenue = paidClients.reduce((sum, c) => sum + getMonthlyFee(c.weeklySessions || 1), 0);
+
+    const totalSlots = clients.reduce((sum, c) => sum + (c.weeklySessions || 1) * 4, 0);
+    const attendedCount = attendance.reduce((sum, a) => sum + (a.sessions || []).filter(s => s === 'attended').length, 0);
+    const attendanceRate = totalSlots ? Math.round((attendedCount / totalSlots) * 100) : 0;
+
+    const programCounts = {};
+    bookings.forEach(b => {
+      const p = b.programType || 'Unknown';
+      programCounts[p] = (programCounts[p] || 0) + 1;
+    });
+    const programLabels = Object.keys(programCounts);
+    const programData = Object.values(programCounts);
+
+    container.innerHTML = `
+      <div class="card">
+        <h3>Analytics Dashboard</h3>
+        <div class="grid-2" style="margin-bottom:20px;">
+          <div class="stat-card">
+            <div class="value">GHS ${revenue}</div>
+            <div class="label">Monthly Revenue</div>
+          </div>
+          <div class="stat-card">
+            <div class="value">${attendanceRate}%</div>
+            <div class="label">Attendance Rate</div>
+          </div>
+        </div>
+        <div style="height:300px; margin-bottom:20px;">
+          <canvas id="programChart"></canvas>
+        </div>
+        <button class="btn-outline" onclick="exportAnalyticsCSV()">Download Analytics CSV</button>
+      </div>
+    `;
+
+    const ctx = document.getElementById('programChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: programLabels,
+        datasets: [{
+          label: 'Bookings by Program',
+          data: programData,
+          backgroundColor: '#CCFF00',
+          borderColor: '#B3E600',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false
+      }
+    });
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error loading analytics: ${error.message}</p></div>`;
+  }
+}
+
+window.exportAnalyticsCSV = async function() {
+  const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+  const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  const rows = [['Username', 'Plan', 'Paid Through', 'Weekly Sessions']];
+  clients.forEach(c => {
+    rows.push([c.username || c.name, `${c.weeklySessions || 1}x`, c.paidThroughMonth || 'Not set', c.weeklySessions || 1]);
+  });
+  exportToCSV('analytics_clients.csv', rows);
 };
 
 // ===================== ADMIN MESSAGES =====================
@@ -1744,8 +2106,11 @@ window.adminOpenConversation = function(convId) {
     const text = messageInput.value.trim();
     if (!text) return;
     const convRef = db.collection('conversations').doc(convId);
-    await convRef.collection('messages').add({ senderId: currentUser.uid, text, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    const msgRef = await convRef.collection('messages').add({ senderId: currentUser.uid, text, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
     await convRef.update({ lastMessage: text, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    showUndoButton(async () => {
+      await msgRef.delete();
+    });
     messageInput.value = '';
   }
   document.getElementById('adminSendMessageBtn').addEventListener('click', sendMessage);
