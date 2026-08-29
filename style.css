@@ -49,9 +49,7 @@ body.dark-mode {
   padding: 20px;
 }
 
-body.dark-mode #authScreen {
-  background: var(--bg-dark);
-}
+body.dark-mode #authScreen { background: var(--bg-dark); }
 
 .auth-card {
   background: var(--card-light);
@@ -63,20 +61,10 @@ body.dark-mode #authScreen {
   text-align: center;
 }
 
-body.dark-mode .auth-card {
-  background: var(--card-dark);
-}
+body.dark-mode .auth-card { background: var(--card-dark); }
 
-.auth-card h1 {
-  font-size: 2rem;
-  font-weight: 800;
-  margin-bottom: 8px;
-}
-
-.auth-card .subtitle {
-  color: var(--gray-600);
-  margin-bottom: 28px;
-}
+.auth-card h1 { font-size: 2rem; font-weight: 800; margin-bottom: 8px; }
+.auth-card .subtitle { color: var(--gray-600); margin-bottom: 28px; }
 
 .btn-primary {
   background: var(--ball);
@@ -102,10 +90,7 @@ body.dark-mode .btn-primary {
   border-color: rgba(255,255,255,0.1);
 }
 
-.btn-primary:hover {
-  background: var(--ball);
-  transform: translateY(-2px);
-}
+.btn-primary:hover { background: var(--ball); transform: translateY(-2px); }
 
 .btn-outline {
   background: transparent;
@@ -119,15 +104,8 @@ body.dark-mode .btn-primary {
   margin-bottom: 8px;
 }
 
-body.dark-mode .btn-outline {
-  border-color: var(--text-dark);
-  color: var(--text-dark);
-}
-
-.btn-outline:hover {
-  background: var(--text-light);
-  color: var(--bg-light);
-}
+body.dark-mode .btn-outline { border-color: var(--text-dark); color: var(--text-dark); }
+.btn-outline:hover { background: var(--text-light); color: var(--bg-light); }
 
 .btn-danger {
   background: var(--red);
@@ -186,10 +164,7 @@ body.dark-mode .onboarding-card { background: var(--card-dark); }
   cursor: pointer;
 }
 
-body.dark-mode .logout-btn {
-  background: rgba(255,255,255,0.1);
-  color: white;
-}
+body.dark-mode .logout-btn { background: rgba(255,255,255,0.1); color: white; }
 
 .bottom-nav {
   position: fixed;
@@ -208,9 +183,7 @@ body.dark-mode .logout-btn {
   box-shadow: 0 4px 20px rgba(0,0,0,0.1);
 }
 
-body.dark-mode .bottom-nav {
-  background: rgba(30,30,30,0.8);
-}
+body.dark-mode .bottom-nav { background: rgba(30,30,30,0.8); }
 
 .nav-btn {
   background: none;
@@ -227,12 +200,7 @@ body.dark-mode .bottom-nav {
   transition: all var(--transition);
 }
 
-.nav-btn.active {
-  color: var(--text-light);
-  background: var(--ball);
-  font-weight: 700;
-}
-
+.nav-btn.active { color: var(--text-light); background: var(--ball); font-weight: 700; }
 .nav-btn svg { width: 22px; height: 22px; }
 
 .card {
@@ -345,12 +313,7 @@ body.dark-mode .chat-container { background: var(--card-dark); }
   border-radius: 0 0 var(--radius) var(--radius);
   margin-bottom: 20px;
 }
-.date-picker-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 15px;
-}
+.date-picker-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .date-picker-header h3 { font-size: 1.2rem; font-weight: 700; }
 .date-picker-nav button {
   background: rgba(255,255,255,0.2);
@@ -360,12 +323,7 @@ body.dark-mode .chat-container { background: var(--card-dark); }
   border-radius: var(--pill-radius);
   cursor: pointer;
 }
-.date-picker-strip {
-  display: flex;
-  gap: 10px;
-  overflow-x: auto;
-  padding-bottom: 5px;
-}
+.date-picker-strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 5px; }
 .date-pill {
   min-width: 60px;
   height: 70px;
