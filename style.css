@@ -331,7 +331,7 @@ body.dark-mode .chat-container { background: var(--card-dark); }
 
 /* Hero Section */
 .hero {
-  background: url('images/home-bg.jpg') no-repeat center center/cover;
+  background: linear-gradient(135deg, #0055FF, #0033AA);
   height: 200px;
   border-radius: var(--radius);
   display: flex;
@@ -416,6 +416,30 @@ body.dark-mode .chat-container { background: var(--card-dark); }
 }
 .date-pill.active .indicator {
   background: var(--black);
+}
+
+/* Weekly booking strip on dashboard */
+.weekly-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 0;
+}
+.weekly-day {
+  min-width: 70px;
+  height: 60px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--card-light);
+  box-shadow: var(--shadow);
+  cursor: default;
+}
+.weekly-day.booked {
+  background: var(--ball);
+  color: var(--black);
 }
 
 @media (min-width: 768px) {
