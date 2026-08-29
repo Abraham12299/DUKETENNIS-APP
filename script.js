@@ -187,112 +187,118 @@ function renderCurrentScreen() {
 
 // ===================== CLIENT DASHBOARD =====================
 async function renderClientDashboard(container) {
-  const now = new Date();
-  const monthKey = clientAttendanceMonth;
-  const weeklyLimit = userProfile.weeklySessions || 1;
-  const totalSessions = weeklyLimit * 4;
+  container.innerHTML = '<p>Loading...</p>';
+  try {
+    const now = new Date();
+    const monthKey = clientAttendanceMonth;
+    const weeklyLimit = userProfile.weeklySessions || 1;
+    const totalSessions = weeklyLimit * 4;
 
-  const attendanceRef = db.collection('attendance').doc(`${userProfile.uid}_${monthKey}`);
-  const attendanceSnap = await attendanceRef.get();
-  let sessions = Array(totalSessions).fill('none');
-  if (attendanceSnap.exists) {
-    const stored = attendanceSnap.data().sessions || [];
-    sessions = stored.map(s => s === true ? 'attended' : s === false ? 'none' : s);
-    while (sessions.length < totalSessions) sessions.push('none');
-    if (sessions.length > totalSessions) sessions = sessions.slice(0, totalSessions);
+    const attendanceRef = db.collection('attendance').doc(`${userProfile.uid}_${monthKey}`);
+    const attendanceSnap = await attendanceRef.get();
+    let sessions = Array(totalSessions).fill('none');
+    if (attendanceSnap.exists) {
+      const stored = attendanceSnap.data().sessions || [];
+      sessions = stored.map(s => s === true ? 'attended' : s === false ? 'none' : s);
+      while (sessions.length < totalSessions) sessions.push('none');
+      if (sessions.length > totalSessions) sessions = sessions.slice(0, totalSessions);
+    }
+
+    const attendedCount = sessions.filter(s => s === 'attended').length;
+
+    const bookingsSnap = await db.collection('bookings').where('userId', '==', userProfile.uid).get();
+    const bookings = bookingsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const upcoming = bookings.filter(b => b.status === 'booked' && b.date >= now.toISOString().split('T')[0]);
+
+    const reviewsSnap = await db.collection('reviews').where('userId', '==', userProfile.uid).get();
+    const reviewedIds = new Set(reviewsSnap.docs.map(d => d.data().bookingId));
+    const pendingReviews = bookings.filter(b => b.status === 'attended' && !reviewedIds.has(b.id));
+
+    const annSnap = await db.collection('announcements').orderBy('createdAt', 'desc').limit(3).get();
+    const announcements = annSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    const progress = totalSessions > 0 ? Math.min(100, Math.round((attendedCount / totalSessions) * 100)) : 0;
+
+    let attendanceGridHtml = '';
+    for (let i = 0; i < totalSessions; i++) {
+      const status = sessions[i];
+      const color = status === 'attended' ? '#4CAF50' : status === 'booked' ? '#FFC107' : '#E0E0E0';
+      const label = status === 'attended' ? '✓' : status === 'booked' ? 'B' : '-';
+      attendanceGridHtml += `<div style="display:inline-block;width:30px;height:30px;border-radius:50%;background:${color};color:white;text-align:center;line-height:30px;margin:2px;font-weight:bold;">${label}</div>`;
+    }
+
+    container.innerHTML = `
+      <div class="card" style="background:var(--black);color:var(--white);">
+        <h2 style="color:var(--ball);">Welcome, ${escapeHtml(userProfile.username || userProfile.name)}</h2>
+        <p>${userProfile.skillCategory} Player</p>
+        <div class="grid-2" style="margin-top:16px;">
+          <div class="stat-card" style="background:rgba(255,255,255,0.08);color:white;">
+            <div class="value">${weeklyLimit}x</div>
+            <div class="label">per week</div>
+          </div>
+          <div class="stat-card" style="background:rgba(255,255,255,0.08);color:white;">
+            <div class="value">${attendedCount}/${totalSessions}</div>
+            <div class="label">attended this month</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="btn-outline" onclick="clientChangeMonth(-1)">◀ Prev</button>
+          <input type="month" value="${monthKey}" onchange="clientSetMonthFromPicker(this.value)">
+          <button class="btn-outline" onclick="clientChangeMonth(1)">Next ▶</button>
+        </div>
+      </div>
+
+      ${pendingReviews.length > 0 ? `
+        <div class="card" style="border-left:4px solid var(--ball);">
+          <h3>Leave a Review</h3>
+          <p>You have ${pendingReviews.length} session(s) awaiting review.</p>
+          ${pendingReviews.map(b => `<button class="btn-outline" onclick="showReviewPrompt('${b.id}','${b.date}','${b.programType}')">Review ${escapeHtml(b.programType)} on ${formatDate(b.date)}</button>`).join('')}
+        </div>
+      ` : ''}
+
+      <div class="card">
+        <h3>Monthly Attendance (${monthKey})</h3>
+        <p>${attendedCount} / ${totalSessions} sessions attended</p>
+        <div style="background:var(--gray-200);border-radius:10px;height:12px;overflow:hidden;">
+          <div style="width:${progress}%;background:var(--ball);height:100%;"></div>
+        </div>
+        <div style="margin-top:10px;">${attendanceGridHtml}</div>
+        <p style="font-size:0.8rem;color:var(--gray-600);margin-top:8px;">Green = Attended, Yellow = Booked, Gray = Not Marked</p>
+      </div>
+
+      <div class="grid-2">
+        <button class="btn-primary" onclick="navigateTo('booking')">Book a Session</button>
+        <button class="btn-outline" onclick="navigateTo('messages')">Message Coach</button>
+      </div>
+
+      <div class="card">
+        <h3>Coach Announcements</h3>
+        ${announcements.length === 0 ? '<p>No announcements yet.</p>' : announcements.map(a => `
+          <div class="announcement-item">
+            <h4>${escapeHtml(a.title)}</h4>
+            <p>${escapeHtml(a.body)}</p>
+            <small>${new Date(a.createdAt?.toDate()).toLocaleDateString()}</small>
+          </div>
+        `).join('')}
+      </div>
+
+      <div class="card">
+        <h3>Upcoming Sessions</h3>
+        ${upcoming.length === 0 ? '<p>No upcoming sessions.</p>' : upcoming.map(b => `
+          <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100);">
+            <div><strong>${escapeHtml(b.programType)}</strong><div>${formatDate(b.date)}</div></div>
+            <span class="badge badge-green">${b.status}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  } catch (error) {
+    console.error('Dashboard error:', error);
+    container.innerHTML = `<div class="card"><p>Error loading dashboard: ${error.message}</p><p>Please check your permissions or contact admin.</p></div>`;
   }
-
-  const attendedCount = sessions.filter(s => s === 'attended').length;
-
-  const bookingsSnap = await db.collection('bookings').where('userId', '==', userProfile.uid).get();
-  const bookings = bookingsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-  const upcoming = bookings.filter(b => b.status === 'booked' && b.date >= now.toISOString().split('T')[0]);
-
-  const reviewsSnap = await db.collection('reviews').where('userId', '==', userProfile.uid).get();
-  const reviewedIds = new Set(reviewsSnap.docs.map(d => d.data().bookingId));
-  const pendingReviews = bookings.filter(b => b.status === 'attended' && !reviewedIds.has(b.id));
-
-  const annSnap = await db.collection('announcements').orderBy('createdAt', 'desc').limit(3).get();
-  const announcements = annSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-  const progress = totalSessions > 0 ? Math.min(100, Math.round((attendedCount / totalSessions) * 100)) : 0;
-
-  let attendanceGridHtml = '';
-  for (let i = 0; i < totalSessions; i++) {
-    const status = sessions[i];
-    const color = status === 'attended' ? '#4CAF50' : status === 'booked' ? '#FFC107' : '#E0E0E0';
-    const label = status === 'attended' ? '✓' : status === 'booked' ? 'B' : '-';
-    attendanceGridHtml += `<div style="display:inline-block;width:30px;height:30px;border-radius:50%;background:${color};color:white;text-align:center;line-height:30px;margin:2px;font-weight:bold;">${label}</div>`;
-  }
-
-  container.innerHTML = `
-    <div class="card" style="background:var(--black);color:var(--white);">
-      <h2 style="color:var(--ball);">Welcome, ${escapeHtml(userProfile.username || userProfile.name)}</h2>
-      <p>${userProfile.skillCategory} Player</p>
-      <div class="grid-2" style="margin-top:16px;">
-        <div class="stat-card" style="background:rgba(255,255,255,0.08);color:white;">
-          <div class="value">${weeklyLimit}x</div>
-          <div class="label">per week</div>
-        </div>
-        <div class="stat-card" style="background:rgba(255,255,255,0.08);color:white;">
-          <div class="value">${attendedCount}/${totalSessions}</div>
-          <div class="label">attended this month</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <button class="btn-outline" onclick="clientChangeMonth(-1)">◀ Prev</button>
-        <input type="month" value="${monthKey}" onchange="clientSetMonthFromPicker(this.value)">
-        <button class="btn-outline" onclick="clientChangeMonth(1)">Next ▶</button>
-      </div>
-    </div>
-
-    ${pendingReviews.length > 0 ? `
-      <div class="card" style="border-left:4px solid var(--ball);">
-        <h3>Leave a Review</h3>
-        <p>You have ${pendingReviews.length} session(s) awaiting review.</p>
-        ${pendingReviews.map(b => `<button class="btn-outline" onclick="showReviewPrompt('${b.id}','${b.date}','${b.programType}')">Review ${escapeHtml(b.programType)} on ${formatDate(b.date)}</button>`).join('')}
-      </div>
-    ` : ''}
-
-    <div class="card">
-      <h3>Monthly Attendance (${monthKey})</h3>
-      <p>${attendedCount} / ${totalSessions} sessions attended</p>
-      <div style="background:var(--gray-200);border-radius:10px;height:12px;overflow:hidden;">
-        <div style="width:${progress}%;background:var(--ball);height:100%;"></div>
-      </div>
-      <div style="margin-top:10px;">${attendanceGridHtml}</div>
-      <p style="font-size:0.8rem;color:var(--gray-600);margin-top:8px;">Green = Attended, Yellow = Booked, Gray = Not Marked</p>
-    </div>
-
-    <div class="grid-2">
-      <button class="btn-primary" onclick="navigateTo('booking')">Book a Session</button>
-      <button class="btn-outline" onclick="navigateTo('messages')">Message Coach</button>
-    </div>
-
-    <div class="card">
-      <h3>Coach Announcements</h3>
-      ${announcements.length === 0 ? '<p>No announcements yet.</p>' : announcements.map(a => `
-        <div class="announcement-item">
-          <h4>${escapeHtml(a.title)}</h4>
-          <p>${escapeHtml(a.body)}</p>
-          <small>${new Date(a.createdAt?.toDate()).toLocaleDateString()}</small>
-        </div>
-      `).join('')}
-    </div>
-
-    <div class="card">
-      <h3>Upcoming Sessions</h3>
-      ${upcoming.length === 0 ? '<p>No upcoming sessions.</p>' : upcoming.map(b => `
-        <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100);">
-          <div><strong>${escapeHtml(b.programType)}</strong><div>${formatDate(b.date)}</div></div>
-          <span class="badge badge-green">${b.status}</span>
-        </div>
-      `).join('')}
-    </div>
-  `;
 }
 
 window.clientChangeMonth = function(delta) {
@@ -451,25 +457,35 @@ async function renderAnnouncements(container) {
 // ===================== ALERTS (NOTIFICATIONS) =====================
 async function renderAlerts(container) {
   container.innerHTML = '<p>Loading...</p>';
-  const notifSnap = await db.collection('notifications')
-    .where('sentTo', 'array-contains', userProfile.uid)
-    .orderBy('createdAt', 'desc')
-    .get();
-  const notifications = notifSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  try {
+    const notifSnap = await db.collection('notifications')
+      .where('sentTo', 'array-contains', userProfile.uid)
+      .get();
+    const notifications = notifSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  container.innerHTML = notifications.length === 0
-    ? '<div class="card"><p>No notifications.</p></div>'
-    : notifications.map(n => {
-        const isRead = n.readBy && n.readBy.includes(userProfile.uid);
-        return `
-          <div class="card" style="${isRead ? '' : 'border-left:4px solid var(--ball);'}">
-            <h3>${escapeHtml(n.title)}</h3>
-            <p>${escapeHtml(n.body)}</p>
-            <small>${new Date(n.createdAt?.toDate()).toLocaleString()}</small>
-            ${!isRead ? `<button class="btn-outline" onclick="markNotifRead('${n.id}')">Mark as read</button>` : ''}
-          </div>
-        `;
-      }).join('');
+    notifications.sort((a, b) => {
+      const timeA = a.createdAt?.toDate?.() || new Date(0);
+      const timeB = b.createdAt?.toDate?.() || new Date(0);
+      return timeB - timeA;
+    });
+
+    container.innerHTML = notifications.length === 0
+      ? '<div class="card"><p>No notifications.</p></div>'
+      : notifications.map(n => {
+          const isRead = n.readBy && n.readBy.includes(userProfile.uid);
+          return `
+            <div class="card" style="${isRead ? '' : 'border-left:4px solid var(--ball);'}">
+              <h3>${escapeHtml(n.title)}</h3>
+              <p>${escapeHtml(n.body)}</p>
+              <small>${new Date(n.createdAt?.toDate()).toLocaleString()}</small>
+              ${!isRead ? `<button class="btn-outline" onclick="markNotifRead('${n.id}')">Mark as read</button>` : ''}
+            </div>
+          `;
+        }).join('');
+  } catch (error) {
+    console.error('Error loading alerts:', error);
+    container.innerHTML = `<div class="card"><p>Error loading notifications: ${error.message}</p></div>`;
+  }
 }
 
 window.markNotifRead = async function(notifId) {
@@ -1172,6 +1188,12 @@ async function renderAdminReviews(container) {
 // ===================== ADMIN NOTIFICATIONS =====================
 async function renderAdminNotifications(container) {
   container.innerHTML = '<p>Loading...</p>';
+
+  if (allUsersCache.length === 0) {
+    const usersSnap = await db.collection('users').get();
+    allUsersCache = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  }
+
   const notificationsSnap = await db.collection('notifications').orderBy('createdAt', 'desc').get();
   const notifications = notificationsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
