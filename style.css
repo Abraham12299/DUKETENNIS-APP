@@ -1,6 +1,7 @@
 :root {
   --ball: #CCFF00;
   --ball-dark: #B3E600;
+  --blue-bg: #0055FF;       /* Electric blue background */
   --black: #111111;
   --white: #FFFFFF;
   --gray-50: #F9F9F9;
@@ -10,9 +11,9 @@
   --gray-600: #666666;
   --red: #D32F2F;
   --green: #2E7D32;
-  --blue: #1565C0;
-  --radius: 14px;
-  --shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --radius: 24px;           /* Soft curved corners for cards */
+  --pill-radius: 9999px;    /* Fully rounded pill buttons */
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   --transition: 0.2s ease;
 }
 
@@ -24,10 +25,10 @@
 }
 
 body {
-  background: var(--gray-50);
+  background: var(--blue-bg);
   color: var(--black);
   min-height: 100vh;
-  padding-bottom: 70px;
+  padding-bottom: 80px;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -36,14 +37,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--black);
+  background: var(--blue-bg);
   padding: 20px;
 }
 
 .auth-card {
   background: var(--white);
-  border-radius: 24px;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+  border-radius: 32px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.2);
   padding: 32px 24px;
   width: 100%;
   max-width: 420px;
@@ -55,6 +56,7 @@ body {
   color: var(--black);
   letter-spacing: 1px;
   margin-bottom: 8px;
+  font-weight: 800;
 }
 
 .auth-card .subtitle {
@@ -67,27 +69,28 @@ body {
   background: var(--ball);
   color: var(--black);
   border: none;
-  border-radius: var(--radius);
-  padding: 14px;
-  font-weight: 600;
+  border-radius: var(--pill-radius);
+  padding: 14px 24px;
+  font-weight: 700;
   font-size: 1rem;
   cursor: pointer;
-  transition: background var(--transition);
+  transition: background var(--transition), transform 0.1s;
   width: 100%;
   margin-bottom: 8px;
 }
 
 .btn-primary:hover {
   background: var(--ball-dark);
+  transform: translateY(-2px);
 }
 
 .btn-outline {
   background: transparent;
-  border: 1.5px solid var(--black);
+  border: 2px solid var(--black);
   color: var(--black);
-  border-radius: var(--radius);
+  border-radius: var(--pill-radius);
   padding: 10px 16px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
   transition: all var(--transition);
   margin-bottom: 8px;
@@ -102,9 +105,13 @@ body {
   background: var(--red);
   color: white;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--pill-radius);
   padding: 8px 14px;
   cursor: pointer;
+}
+
+.pill {
+  border-radius: var(--pill-radius);
 }
 
 #onboardingOverlay {
@@ -123,7 +130,7 @@ body {
 
 .onboarding-card {
   background: var(--white);
-  border-radius: 20px;
+  border-radius: 32px;
   padding: 24px;
   width: 100%;
   max-width: 400px;
@@ -133,7 +140,7 @@ body {
   display: none;
   max-width: 900px;
   margin: 0 auto;
-  padding: 16px 12px 80px;
+  padding: 16px 12px 100px;
 }
 
 .top-bar {
@@ -141,32 +148,40 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  color: white;
 }
 
 .top-bar h2 {
-  font-size: 1.4rem;
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
 }
 
 .logout-btn {
-  background: transparent;
-  border: 1px solid var(--black);
-  border-radius: 8px;
-  padding: 8px 14px;
-  font-weight: 500;
+  background: rgba(0,0,0,0.3);
+  border: none;
+  color: white;
+  border-radius: var(--pill-radius);
+  padding: 8px 18px;
+  font-weight: 600;
   cursor: pointer;
+  backdrop-filter: blur(10px);
 }
 
 .bottom-nav {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: var(--white);
-  border-top: 1px solid var(--gray-200);
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 40px);
+  max-width: 500px;
+  background: #1A1A1A;
+  border-radius: var(--pill-radius);
   display: flex;
   justify-content: space-around;
-  padding: 8px 0;
+  padding: 8px;
   z-index: 100;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
 
 .nav-btn {
@@ -176,17 +191,18 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  color: var(--gray-600);
+  color: #AAAAAA;
   font-size: 0.7rem;
   cursor: pointer;
-  padding: 4px 10px;
-  border-radius: 8px;
+  padding: 8px 12px;
+  border-radius: var(--pill-radius);
+  transition: all var(--transition);
 }
 
 .nav-btn.active {
   color: var(--black);
   background: var(--ball);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .nav-btn svg {
@@ -203,8 +219,9 @@ body {
 }
 
 .card h3 {
-  font-size: 1.1rem;
+  font-size: 1.2rem;
   margin-bottom: 14px;
+  font-weight: 700;
 }
 
 .grid-2 {
@@ -215,7 +232,7 @@ body {
 
 .stat-card {
   background: var(--white);
-  border-radius: var(--radius);
+  border-radius: 16px;
   padding: 16px;
   box-shadow: var(--shadow);
   text-align: center;
@@ -223,7 +240,7 @@ body {
 
 .stat-card .value {
   font-size: 1.8rem;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .stat-card .label {
@@ -234,9 +251,9 @@ body {
 
 input, select, textarea {
   width: 100%;
-  padding: 12px;
+  padding: 12px 16px;
   border: 1px solid var(--gray-200);
-  border-radius: 10px;
+  border-radius: var(--pill-radius);
   font-size: 0.95rem;
   margin-bottom: 12px;
   background: var(--white);
@@ -244,7 +261,7 @@ input, select, textarea {
 
 label {
   font-size: 0.85rem;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--gray-600);
   display: block;
   margin-bottom: 4px;
@@ -255,7 +272,7 @@ label {
   padding: 4px 10px;
   border-radius: 20px;
   font-size: 0.7rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .badge-green { background: #E8F5E9; color: var(--green); }
@@ -274,7 +291,7 @@ th {
   padding: 10px 8px;
   background: var(--black);
   color: var(--white);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 td {
@@ -291,20 +308,20 @@ td {
 }
 
 .tab-btn {
-  padding: 8px 14px;
-  border-radius: 20px;
-  border: 1px solid var(--gray-200);
-  background: var(--white);
+  padding: 10px 16px;
+  border-radius: var(--pill-radius);
+  border: none;
+  background: rgba(0,0,0,0.2);
+  color: white;
   cursor: pointer;
   white-space: nowrap;
-  font-weight: 500;
-  color: var(--gray-600);
+  font-weight: 600;
+  transition: all var(--transition);
 }
 
 .tab-btn.active {
   background: var(--ball);
   color: var(--black);
-  border-color: var(--black);
 }
 
 .announcement-item {
@@ -327,7 +344,7 @@ td {
   background: var(--black);
   color: var(--white);
   padding: 14px 20px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .chat-messages {
@@ -384,7 +401,7 @@ td {
   padding: 14px 16px;
   font-size: 1rem;
   border: 1px solid var(--gray-200);
-  border-radius: 24px;
+  border-radius: var(--pill-radius);
   margin-bottom: 0;
   min-width: 0;
 }
@@ -393,7 +410,7 @@ td {
   width: auto;
   padding: 12px 16px;
   font-size: 0.9rem;
-  border-radius: 24px;
+  border-radius: var(--pill-radius);
   margin-bottom: 0;
   flex-shrink: 0;
 }
@@ -411,10 +428,7 @@ td {
 
 @media (min-width: 768px) {
   body { padding-bottom: 0; }
-  #appScreen { padding: 24px 20px; }
-  .bottom-nav { top: 0; bottom: auto; width: 80px; height: 100vh; flex-direction: column; justify-content: flex-start; padding-top: 20px; }
-  .nav-btn { flex-direction: row; justify-content: flex-start; width: 100%; padding: 12px 16px; }
-  .nav-btn span { display: none; }
-  .nav-btn.active span { display: inline; }
+  #appScreen { padding: 24px 20px 100px; }
+  .bottom-nav { bottom: 20px; }
   .grid-2 { grid-template-columns: repeat(3, 1fr); }
 }
