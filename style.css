@@ -40,7 +40,6 @@ body.dark-mode {
   color: var(--text-dark);
 }
 
-/* Auth Screen */
 #authScreen {
   min-height: 100vh;
   display: flex;
@@ -141,7 +140,6 @@ body.dark-mode .btn-outline {
 
 .pill { border-radius: var(--pill-radius); }
 
-/* Onboarding */
 #onboardingOverlay {
   position: fixed;
   inset: 0;
@@ -163,7 +161,6 @@ body.dark-mode .btn-outline {
 
 body.dark-mode .onboarding-card { background: var(--card-dark); }
 
-/* App Screen */
 #appScreen {
   display: none;
   max-width: 900px;
@@ -194,7 +191,6 @@ body.dark-mode .logout-btn {
   color: white;
 }
 
-/* Bottom Nav */
 .bottom-nav {
   position: fixed;
   bottom: 20px;
@@ -239,7 +235,6 @@ body.dark-mode .bottom-nav {
 
 .nav-btn svg { width: 22px; height: 22px; }
 
-/* Cards */
 .card {
   background: var(--card-light);
   border-radius: var(--radius);
@@ -267,7 +262,6 @@ body.dark-mode .stat-card { background: var(--card-dark); }
 .stat-card .value { font-size: 1.8rem; font-weight: 800; }
 .stat-card .label { font-size: 0.8rem; color: var(--gray-600); }
 
-/* Inputs */
 input, select, textarea {
   width: 100%;
   padding: 12px 16px;
@@ -287,13 +281,11 @@ body.dark-mode textarea {
   border-color: #333;
 }
 
-/* Tables */
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 th { text-align: left; padding: 10px 8px; background: var(--text-light); color: var(--bg-light); }
 body.dark-mode th { background: #333; color: white; }
 td { padding: 10px 8px; border-bottom: 1px solid var(--gray-100); }
 
-/* Tabs */
 .tab-bar { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 20px; }
 .tab-btn {
   padding: 10px 16px;
@@ -308,7 +300,6 @@ td { padding: 10px 8px; border-bottom: 1px solid var(--gray-100); }
 }
 .tab-btn.active { background: var(--ball); color: var(--text-light); }
 
-/* Chat */
 .chat-container {
   display: flex;
   flex-direction: column;
@@ -329,7 +320,6 @@ body.dark-mode .chat-container { background: var(--card-dark); }
 .chat-input input { flex: 1; padding: 14px 16px; border-radius: var(--pill-radius); }
 .chat-input .btn-primary { width: auto; padding: 12px 16px; }
 
-/* Hero Section */
 .hero {
   background: linear-gradient(135deg, #0055FF, #0033AA);
   height: 200px;
@@ -343,13 +333,11 @@ body.dark-mode .chat-container { background: var(--card-dark); }
 .hero h1 { font-size: 2rem; font-weight: 800; }
 .hero p { margin-bottom: 8px; }
 
-/* Profile */
 .profile-cover { width: 100%; height: 150px; background: var(--gray-200); border-radius: var(--radius) var(--radius) 0 0; overflow: hidden; }
 .profile-cover img { width: 100%; height: 100%; object-fit: cover; }
 .profile-picture { width: 80px; height: 80px; border-radius: 50%; border: 3px solid var(--ball); overflow: hidden; margin: -40px auto 8px; }
 .profile-picture img { width: 100%; height: 100%; object-fit: cover; }
 
-/* Horizontal Date Picker */
 .date-picker-container {
   background: #0055FF;
   color: white;
@@ -363,10 +351,7 @@ body.dark-mode .chat-container { background: var(--card-dark); }
   align-items: center;
   margin-bottom: 15px;
 }
-.date-picker-header h3 {
-  font-size: 1.2rem;
-  font-weight: 700;
-}
+.date-picker-header h3 { font-size: 1.2rem; font-weight: 700; }
 .date-picker-nav button {
   background: rgba(255,255,255,0.2);
   border: none;
@@ -395,36 +380,13 @@ body.dark-mode .chat-container { background: var(--card-dark); }
   color: white;
   padding: 8px;
 }
-.date-pill.active {
-  background: var(--ball);
-  color: var(--black);
-}
-.date-pill .day {
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-.date-pill .date {
-  font-size: 1.2rem;
-  font-weight: 800;
-}
-.date-pill .indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: transparent;
-  margin-top: 5px;
-}
-.date-pill.active .indicator {
-  background: var(--black);
-}
+.date-pill.active { background: var(--ball); color: var(--black); }
+.date-pill .day { font-size: 0.75rem; font-weight: 600; }
+.date-pill .date { font-size: 1.2rem; font-weight: 800; }
+.date-pill .indicator { width: 8px; height: 8px; border-radius: 50%; background: transparent; margin-top: 5px; }
+.date-pill.active .indicator { background: var(--black); }
 
-/* Weekly booking strip on dashboard */
-.weekly-strip {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 10px 0;
-}
+.weekly-strip { display: flex; gap: 8px; overflow-x: auto; padding: 10px 0; }
 .weekly-day {
   min-width: 70px;
   height: 60px;
@@ -437,10 +399,11 @@ body.dark-mode .chat-container { background: var(--card-dark); }
   box-shadow: var(--shadow);
   cursor: default;
 }
-.weekly-day.booked {
-  background: var(--ball);
-  color: var(--black);
-}
+.weekly-day.booked { background: var(--ball); color: var(--black); }
+
+.messaging-sub-nav { display: flex; justify-content: space-around; background: rgba(0,0,0,0.1); border-radius: var(--pill-radius); padding: 8px; margin-bottom: 12px; }
+.messaging-sub-btn { background: none; border: none; color: var(--gray-600); font-weight: 600; padding: 8px 16px; border-radius: var(--pill-radius); cursor: pointer; }
+.messaging-sub-btn.active { background: var(--ball); color: var(--text-light); }
 
 @media (min-width: 768px) {
   body { padding-bottom: 0; }
