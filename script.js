@@ -16,15 +16,9 @@ const ADMIN_EMAILS = [
   'duketennis4@gmail.com'
 ];
 
-// EmailJS configuration – replace with your own keys
-const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID';
-const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';
-const EMAILJS_PUBLIC_KEY = 'ZYUhrEZYAlfaAgGQh';
-
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
-const storage = firebase.storage();
 
 // ===================== GLOBAL STATE =====================
 let currentUser = null;
@@ -73,31 +67,21 @@ function getMonthlyFee(weeklySessions) {
 // ===================== DARK MODE TOGGLE =====================
 document.addEventListener('DOMContentLoaded', () => {
   const savedTheme = localStorage.getItem('theme');
-  if (savedTheme === 'dark') {
-    document.body.classList.add('dark-mode');
-  }
+  if (savedTheme === 'dark') document.body.classList.add('dark-mode');
 });
 
 document.getElementById('themeToggleBtn').addEventListener('click', () => {
   document.body.classList.toggle('dark-mode');
-  const theme = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
-  localStorage.setItem('theme', theme);
+  localStorage.setItem('theme', document.body.classList.contains('dark-mode') ? 'dark' : 'light');
 });
 
 // ===================== GOOGLE SIGN-IN =====================
 document.getElementById('googleSignInBtn').addEventListener('click', async () => {
   const provider = new firebase.auth.GoogleAuthProvider();
-  try {
-    await auth.signInWithPopup(provider);
-  } catch (error) {
-    console.error('Google sign-in error:', error);
-    alert('Google sign-in failed: ' + error.message);
-  }
+  try { await auth.signInWithPopup(provider); } catch (error) { alert('Google sign-in failed: ' + error.message); }
 });
 
-document.getElementById('logoutBtn').addEventListener('click', async () => {
-  await auth.signOut();
-});
+document.getElementById('logoutBtn').addEventListener('click', async () => { await auth.signOut(); });
 
 auth.onAuthStateChanged(async (user) => {
   if (user) {
@@ -113,14 +97,9 @@ auth.onAuthStateChanged(async (user) => {
       document.getElementById('appScreen').style.display = 'block';
       document.getElementById('bottomNav').style.display = 'flex';
       renderCurrentScreen();
-    } catch (error) {
-      console.error('Profile loading error:', error);
-      alert('Error loading profile: ' + error.message);
-      auth.signOut();
-    }
+    } catch (error) { alert('Error loading profile: ' + error.message); auth.signOut(); }
   } else {
-    currentUser = null;
-    userProfile = null;
+    currentUser = null; userProfile = null;
     document.getElementById('authScreen').style.display = 'flex';
     document.getElementById('appScreen').style.display = 'none';
     document.getElementById('bottomNav').style.display = 'none';
@@ -137,21 +116,10 @@ async function ensureUserProfile(user) {
   } else {
     const isAdmin = ADMIN_EMAILS.includes(user.email);
     const newProfile = {
-      uid: user.uid,
-      email: user.email || '',
-      name: user.displayName || 'Tennis Player',
-      role: isAdmin ? 'admin' : 'client',
-      skillCategory: 'Beginner',
-      weeklySessions: 1,
-      points: 0,
-      matchesWon: 0,
-      matchesLost: 0,
-      username: '',
-      gender: '',
-      profilePic: '',
-      coverPic: '',
-      alertsEnabled: true,
-      paidThroughMonth: '',
+      uid: user.uid, email: user.email || '', name: user.displayName || 'Tennis Player',
+      role: isAdmin ? 'admin' : 'client', skillCategory: 'Beginner', weeklySessions: 1,
+      points: 0, matchesWon: 0, matchesLost: 0, username: '', gender: '',
+      profilePic: '', coverPic: '', alertsEnabled: true, paidThroughMonth: '',
       lastActive: firebase.firestore.FieldValue.serverTimestamp(),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
@@ -169,36 +137,29 @@ document.getElementById('saveUsernameBtn').addEventListener('click', async () =>
   const profilePicFile = document.getElementById('profilePicInput').files[0];
   const errorEl = document.getElementById('usernameError');
   errorEl.textContent = '';
-
   if (!gender) { errorEl.textContent = 'Please select your gender.'; return; }
   if (!username) { errorEl.textContent = 'Username cannot be empty.'; return; }
   if (!profilePicFile) { errorEl.textContent = 'Please upload a profile picture.'; return; }
 
   const q = await db.collection('users').where('username', '==', username).get();
-  if (!q.empty && q.docs[0].id !== userProfile.uid) {
-    errorEl.textContent = 'Username already taken. Please choose another.';
-    return;
-  }
+  if (!q.empty && q.docs[0].id !== userProfile.uid) { errorEl.textContent = 'Username already taken.'; return; }
 
-  try {
-    // Upload profile picture
-    const storageRef = storage.ref(`profile_pics/${userProfile.uid}`);
-    await storageRef.put(profilePicFile);
-    const profilePicUrl = await storageRef.getDownloadURL();
-
-    await db.collection('users').doc(userProfile.uid).update({
-      username,
-      gender,
-      profilePic: profilePicUrl
-    });
-    userProfile.username = username;
-    userProfile.gender = gender;
-    userProfile.profilePic = profilePicUrl;
-    hideOnboarding();
-    renderCurrentScreen();
-  } catch (error) {
-    errorEl.textContent = 'Error uploading profile picture: ' + error.message;
-  }
+  // Convert profile picture to base64 data URL
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const profilePicDataUrl = e.target.result;
+    try {
+      await db.collection('users').doc(userProfile.uid).update({
+        username, gender, profilePic: profilePicDataUrl
+      });
+      userProfile.username = username; userProfile.gender = gender; userProfile.profilePic = profilePicDataUrl;
+      hideOnboarding();
+      renderCurrentScreen();
+    } catch (error) {
+      errorEl.textContent = 'Error saving profile: ' + error.message;
+    }
+  };
+  reader.readAsDataURL(profilePicFile);
 });
 
 // ===================== NAVIGATION =====================
@@ -263,8 +224,8 @@ async function renderClientDashboard(container) {
     const upcoming = bookings.filter(b => b.status === 'booked' && b.date >= now.toISOString().split('T')[0]);
 
     const reviewsSnap = await db.collection('reviews').where('userId', '==', userProfile.uid).get();
-    const reviewedIds = new Set(reviewsSnap.docs.map(d => d.data().bookingId));
-    const pendingReviews = bookings.filter(b => b.status === 'attended' && !reviewedIds.has(b.id));
+    const myReviews = reviewsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const pendingReviews = bookings.filter(b => b.status === 'attended' && !myReviews.some(r => r.bookingId === b.id));
 
     const annSnap = await db.collection('announcements').orderBy('createdAt', 'desc').limit(3).get();
     const announcements = annSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -282,7 +243,7 @@ async function renderClientDashboard(container) {
       attendanceGridHtml += `<div style="display:inline-block;width:30px;height:30px;border-radius:50%;background:${color};color:white;text-align:center;line-height:30px;margin:2px;font-weight:bold;">${label}</div>`;
     }
 
-    // Weekly booking strip (next 7 days)
+    // Weekly strip
     let weeklyStripHtml = '';
     for (let i = 0; i < 7; i++) {
       const d = new Date(now);
@@ -364,6 +325,18 @@ async function renderClientDashboard(container) {
       </div>
 
       <div class="card">
+        <h3>My Reviews</h3>
+        ${myReviews.length === 0 ? '<p>No reviews yet.</p>' : myReviews.map(r => `
+          <div style="border-bottom:1px solid var(--gray-100);padding:8px 0;">
+            <strong>${escapeHtml(r.programType || 'Session')}</strong> on ${formatDate(r.bookingDate || '')}
+            <p>Rating: ${r.rating}/5</p>
+            <p>${escapeHtml(r.comment || '')}</p>
+            <small>${new Date(r.createdAt?.toDate()).toLocaleDateString()}</small>
+          </div>
+        `).join('')}
+      </div>
+
+      <div class="card">
         <h3>Upcoming Sessions</h3>
         ${upcoming.length === 0 ? '<p>No upcoming sessions.</p>' : upcoming.map(b => `
           <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100);">
@@ -393,7 +366,7 @@ window.clientSetMonthFromPicker = function(value) {
   }
 };
 
-// ===================== BOOKING FORM (with date picker) =====================
+// ===================== BOOKING FORM =====================
 async function renderBookingForm(container) {
   const now = new Date();
   const weekStart = new Date(now);
@@ -661,7 +634,7 @@ async function renderRankings(container) {
 
   container.innerHTML = `
     <div class="card" style="border-left:4px solid var(--ball);">
-      <h3 style="color:var(--black); font-size:1.4rem;">🏆 ATP Rankings (All)</h3>
+      <h3 style="color:var(--black); font-size:1.4rem;">🏆 DUKETENNIS Ranking (All)</h3>
       <table>
         <tr><th>#</th><th>Player</th><th>Points</th><th>W/L</th></tr>
         ${combinedRanked.map((p,i) => `<tr><td>${i+1}</td><td>${escapeHtml(p.username || p.name)}</td><td>${p.effectivePoints}</td><td>${p.matchesWon}-${p.matchesLost}</td></tr>`).join('')}
@@ -862,7 +835,7 @@ async function renderProfile(container) {
   try {
     const userDoc = await db.collection('users').doc(userProfile.uid).get();
     const profile = userDoc.data() || userProfile;
-    const profilePicUrl = profile.profilePic || 'default-avatar.png';
+    const profilePicUrl = profile.profilePic || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23ccc"/><text x="50" y="50" font-size="40" text-anchor="middle" dominant-baseline="central">👤</text></svg>';
     const coverUrl = profile.coverPic || '';
 
     container.innerHTML = `
@@ -879,11 +852,11 @@ async function renderProfile(container) {
           <div style="display:flex;gap:8px;margin-top:12px;">
             <label class="btn-outline" style="flex:1;text-align:center;cursor:pointer;">
               Change Profile Picture
-              <input type="file" accept="image/*" style="display:none;" onchange="uploadProfilePic(this)">
+              <input type="file" accept="image/*" style="display:none;" onchange="updateProfilePic(this)">
             </label>
             <label class="btn-outline" style="flex:1;text-align:center;cursor:pointer;">
               Change Cover
-              <input type="file" accept="image/*" style="display:none;" onchange="uploadCoverPic(this)">
+              <input type="file" accept="image/*" style="display:none;" onchange="updateCoverPic(this)">
             </label>
           </div>
         </div>
@@ -894,36 +867,42 @@ async function renderProfile(container) {
   }
 }
 
-window.uploadProfilePic = async function(input) {
+// Update profile picture (base64)
+window.updateProfilePic = async function(input) {
   const file = input.files[0];
   if (!file) return;
-  try {
-    const storageRef = storage.ref(`profile_pics/${userProfile.uid}`);
-    await storageRef.put(file);
-    const url = await storageRef.getDownloadURL();
-    await db.collection('users').doc(userProfile.uid).update({ profilePic: url });
-    userProfile.profilePic = url;
-    alert('Profile picture updated.');
-    renderProfile(document.getElementById('messagingContent'));
-  } catch (error) {
-    alert('Upload failed: ' + error.message);
-  }
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    try {
+      await db.collection('users').doc(userProfile.uid).update({ profilePic: dataUrl });
+      userProfile.profilePic = dataUrl;
+      alert('Profile picture updated.');
+      renderProfile(document.getElementById('messagingContent'));
+    } catch (error) {
+      alert('Update failed: ' + error.message);
+    }
+  };
+  reader.readAsDataURL(file);
 };
 
-window.uploadCoverPic = async function(input) {
+// Update cover picture (base64)
+window.updateCoverPic = async function(input) {
   const file = input.files[0];
   if (!file) return;
-  try {
-    const storageRef = storage.ref(`cover_pics/${userProfile.uid}`);
-    await storageRef.put(file);
-    const url = await storageRef.getDownloadURL();
-    await db.collection('users').doc(userProfile.uid).update({ coverPic: url });
-    userProfile.coverPic = url;
-    alert('Cover updated.');
-    renderProfile(document.getElementById('messagingContent'));
-  } catch (error) {
-    alert('Upload failed: ' + error.message);
-  }
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    try {
+      await db.collection('users').doc(userProfile.uid).update({ coverPic: dataUrl });
+      userProfile.coverPic = dataUrl;
+      alert('Cover updated.');
+      renderProfile(document.getElementById('messagingContent'));
+    } catch (error) {
+      alert('Update failed: ' + error.message);
+    }
+  };
+  reader.readAsDataURL(file);
 };
 
 window.openConversation = function(convId) {
@@ -1009,7 +988,7 @@ function renderChatArea(container) {
     messages.forEach(msg => {
       const sender = allUsersCache.find(u => u.uid === msg.senderId);
       const senderName = sender ? (sender.username || sender.name) : 'Unknown';
-      const senderPic = sender?.profilePic || 'default-avatar.png';
+      const senderPic = sender?.profilePic || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23ccc"/><text x="50" y="50" font-size="40" text-anchor="middle" dominant-baseline="central">👤</text></svg>';
       const timeStr = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleString() : '';
       const div = document.createElement('div');
       div.className = `message ${msg.senderId === userProfile.uid ? 'sent' : 'received'}`;
@@ -1080,6 +1059,8 @@ window.showReviewPrompt = function(bookingId, date, programType) {
     try {
       await db.collection('reviews').add({
         bookingId, userId: userProfile.uid, rating, comment,
+        programType: programType,
+        bookingDate: date,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       alert('Thank you for your review!');
@@ -1200,7 +1181,6 @@ async function renderAdminAttendance(container) {
         <button class="btn-outline" onclick="changeMonth(-1)">◀ Prev</button>
         <input type="month" id="monthPicker" value="${month}" onchange="setMonthFromPicker(this.value)">
         <button class="btn-outline" onclick="changeMonth(1)">Next ▶</button>
-        <button class="btn-outline" onclick="deleteCurrentMonth()">Delete Month</button>
         <button class="btn-outline" onclick="manualAttendance()">Add Manual Attendance</button>
         <button class="btn-outline" onclick="copyClientAttendance()">Copy Client Attendance</button>
         <button class="btn-outline" onclick="copyAllAttendance()">Copy All Attendance</button>
@@ -1255,16 +1235,6 @@ window.setMonthFromPicker = function(value) {
     currentAttendanceMonth = value;
     renderAdminTab('attendance');
   }
-};
-
-window.deleteCurrentMonth = async function() {
-  if (!confirm(`Delete all attendance records for ${currentAttendanceMonth}?`)) return;
-  const batch = db.batch();
-  const snapshot = await db.collection('attendance').where('month', '==', currentAttendanceMonth).get();
-  snapshot.docs.forEach(doc => batch.delete(doc.ref));
-  await batch.commit();
-  alert('Month deleted.');
-  renderAdminTab('attendance');
 };
 
 // Manual attendance
@@ -1418,7 +1388,8 @@ async function renderAdminUsers(container) {
       await db.collection('users').doc(userCredential.user.uid).set({
         uid: userCredential.user.uid, email, name, role, gender,
         weeklySessions: 1, points: 0, matchesWon: 0, matchesLost: 0,
-        username: '', lastActive: firebase.firestore.FieldValue.serverTimestamp(),
+        username: '', profilePic: '', coverPic: '',
+        lastActive: firebase.firestore.FieldValue.serverTimestamp(),
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       alert('User created successfully.');
@@ -1516,6 +1487,7 @@ async function renderAdminReviews(container) {
     const userMap = {};
     usersSnap.docs.forEach(d => userMap[d.id] = d.data());
 
+    // Group by month
     const grouped = {};
     reviews.forEach(r => {
       const date = r.createdAt?.toDate ? r.createdAt.toDate() : new Date();
@@ -1565,6 +1537,16 @@ async function renderAdminNotifications(container) {
   const notificationsSnap = await db.collection('notifications').orderBy('createdAt', 'desc').get();
   const notifications = notificationsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+  // Group by month
+  const grouped = {};
+  notifications.forEach(n => {
+    const date = n.createdAt?.toDate ? n.createdAt.toDate() : new Date();
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+    if (!grouped[monthKey]) grouped[monthKey] = [];
+    grouped[monthKey].push(n);
+  });
+  const sortedMonths = Object.keys(grouped).sort().reverse();
+
   container.innerHTML = `
     <div class="card">
       <h3>Send Notification</h3>
@@ -1583,13 +1565,17 @@ async function renderAdminNotifications(container) {
     </div>
     <div class="card">
       <h3>Sent Notifications</h3>
-      ${notifications.length === 0 ? '<p>No notifications sent.</p>' : notifications.map(n => `
-        <div style="border-bottom:1px solid var(--gray-100);padding:8px 0;">
-          <strong>${escapeHtml(n.title)}</strong>
-          <p>${escapeHtml(n.body)}</p>
-          <small>${new Date(n.createdAt?.toDate()).toLocaleString()}</small>
-        </div>
-      `).join('')}
+      ${sortedMonths.length === 0 ? '<p>No notifications sent.</p>' : sortedMonths.map(month => {
+        const monthLabel = new Date(month + '-01').toLocaleDateString('en-GH', { month: 'long', year: 'numeric' });
+        return `<h4 style="margin-top:12px;margin-bottom:8px;">${monthLabel}</h4>` +
+          grouped[month].map(n => `
+            <div style="border-bottom:1px solid var(--gray-100);padding:8px 0;">
+              <strong>${escapeHtml(n.title)}</strong>
+              <p>${escapeHtml(n.body)}</p>
+              <small>${new Date(n.createdAt?.toDate()).toLocaleString()}</small>
+            </div>
+          `).join('');
+      }).join('')}
     </div>
   `;
 
@@ -1610,21 +1596,6 @@ async function renderAdminNotifications(container) {
         title, body, sentTo, createdBy: currentUser.uid,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: []
       });
-      // Send email via EmailJS if configured
-      if (EMAILJS_SERVICE_ID !== 'YOUR_SERVICE_ID') {
-        emailjs.init(EMAILJS_PUBLIC_KEY);
-        for (const uid of sentTo) {
-          const user = allUsersCache.find(u => u.uid === uid);
-          if (user && user.email) {
-            await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-              to_email: user.email,
-              to_name: user.username || user.name,
-              title: title,
-              message: body
-            });
-          }
-        }
-      }
       alert('Notification sent.');
       renderAdminTab('notifications');
     } catch (error) {
@@ -1700,15 +1671,6 @@ window.sendPaymentReminders = async function() {
           createdAt: firebase.firestore.FieldValue.serverTimestamp(),
           readBy: []
         });
-        if (EMAILJS_SERVICE_ID !== 'YOUR_SERVICE_ID') {
-          emailjs.init(EMAILJS_PUBLIC_KEY);
-          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-            to_email: client.email,
-            to_name: client.username || client.name,
-            title: 'Payment Reminder',
-            message: `Your monthly fee of GHS ${fee} is due.`
-          });
-        }
       }
     }
     alert('Payment reminders sent.');
@@ -1762,7 +1724,7 @@ window.adminOpenConversation = function(convId) {
     messages.forEach(msg => {
       const sender = allUsersCache.find(u => u.uid === msg.senderId);
       const senderName = sender ? (sender.username || sender.name) : 'Unknown';
-      const senderPic = sender?.profilePic || 'default-avatar.png';
+      const senderPic = sender?.profilePic || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23ccc"/><text x="50" y="50" font-size="40" text-anchor="middle" dominant-baseline="central">👤</text></svg>';
       const timeStr = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleString() : '';
       const div = document.createElement('div');
       div.className = `message ${msg.senderId === currentUser.uid ? 'sent' : 'received'}`;
