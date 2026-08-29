@@ -19,7 +19,7 @@ const ADMIN_EMAILS = [
 // EmailJS configuration – replace with your own keys
 const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID';
 const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';
-const EMAILJS_PUBLIC_KEY = 'ZYUhrEZYAlfaAgGQh'; // <-- Your Public Key
+const EMAILJS_PUBLIC_KEY = 'ZYUhrEZYAlfaAgGQh';
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -35,6 +35,7 @@ let allUsersCache = [];
 let currentAttendanceMonth = new Date().toISOString().slice(0,7);
 let clientAttendanceMonth = new Date().toISOString().slice(0,7);
 let messagingTab = 'chats';
+let selectedBookingDate = null;
 
 // ===================== UTILITY FUNCTIONS =====================
 function formatDate(dateStr) {
@@ -62,6 +63,27 @@ function copyToClipboard(text) {
   navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
 }
 
+function getMonthlyFee(weeklySessions) {
+  if (weeklySessions === 1) return 700;
+  if (weeklySessions === 2) return 1200;
+  if (weeklySessions === 3) return 1500;
+  return 0;
+}
+
+// ===================== DARK MODE TOGGLE =====================
+document.addEventListener('DOMContentLoaded', () => {
+  const savedTheme = localStorage.getItem('theme');
+  if (savedTheme === 'dark') {
+    document.body.classList.add('dark-mode');
+  }
+});
+
+document.getElementById('themeToggleBtn').addEventListener('click', () => {
+  document.body.classList.toggle('dark-mode');
+  const theme = document.body.classList.contains('dark-mode') ? 'dark' : 'light';
+  localStorage.setItem('theme', theme);
+});
+
 // ===================== GOOGLE SIGN-IN =====================
 document.getElementById('googleSignInBtn').addEventListener('click', async () => {
   const provider = new firebase.auth.GoogleAuthProvider();
@@ -82,7 +104,7 @@ auth.onAuthStateChanged(async (user) => {
     currentUser = user;
     try {
       await ensureUserProfile(user);
-      if (!userProfile.gender || !userProfile.username || userProfile.username.trim() === '') {
+      if (!userProfile.gender || !userProfile.username || userProfile.username.trim() === '' || !userProfile.profilePic) {
         showOnboarding();
       } else {
         hideOnboarding();
@@ -126,6 +148,8 @@ async function ensureUserProfile(user) {
       matchesLost: 0,
       username: '',
       gender: '',
+      profilePic: '',
+      coverPic: '',
       alertsEnabled: true,
       paidThroughMonth: '',
       lastActive: firebase.firestore.FieldValue.serverTimestamp(),
@@ -142,20 +166,39 @@ function hideOnboarding() { document.getElementById('onboardingOverlay').style.d
 document.getElementById('saveUsernameBtn').addEventListener('click', async () => {
   const username = document.getElementById('usernameInput').value.trim();
   const gender = document.getElementById('genderInput').value;
+  const profilePicFile = document.getElementById('profilePicInput').files[0];
   const errorEl = document.getElementById('usernameError');
   errorEl.textContent = '';
+
   if (!gender) { errorEl.textContent = 'Please select your gender.'; return; }
   if (!username) { errorEl.textContent = 'Username cannot be empty.'; return; }
+  if (!profilePicFile) { errorEl.textContent = 'Please upload a profile picture.'; return; }
+
   const q = await db.collection('users').where('username', '==', username).get();
   if (!q.empty && q.docs[0].id !== userProfile.uid) {
     errorEl.textContent = 'Username already taken. Please choose another.';
     return;
   }
-  await db.collection('users').doc(userProfile.uid).update({ username, gender });
-  userProfile.username = username;
-  userProfile.gender = gender;
-  hideOnboarding();
-  renderCurrentScreen();
+
+  try {
+    // Upload profile picture
+    const storageRef = storage.ref(`profile_pics/${userProfile.uid}`);
+    await storageRef.put(profilePicFile);
+    const profilePicUrl = await storageRef.getDownloadURL();
+
+    await db.collection('users').doc(userProfile.uid).update({
+      username,
+      gender,
+      profilePic: profilePicUrl
+    });
+    userProfile.username = username;
+    userProfile.gender = gender;
+    userProfile.profilePic = profilePicUrl;
+    hideOnboarding();
+    renderCurrentScreen();
+  } catch (error) {
+    errorEl.textContent = 'Error uploading profile picture: ' + error.message;
+  }
 });
 
 // ===================== NAVIGATION =====================
@@ -239,6 +282,24 @@ async function renderClientDashboard(container) {
       attendanceGridHtml += `<div style="display:inline-block;width:30px;height:30px;border-radius:50%;background:${color};color:white;text-align:center;line-height:30px;margin:2px;font-weight:bold;">${label}</div>`;
     }
 
+    // Weekly booking strip (next 7 days)
+    let weeklyStripHtml = '';
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(now);
+      d.setDate(now.getDate() + i);
+      const dateStr = d.toISOString().split('T')[0];
+      const dayName = d.toLocaleDateString('en-GH', { weekday: 'short' });
+      const dateNum = d.getDate();
+      const hasBooking = bookings.some(b => b.date === dateStr && b.status === 'booked');
+      weeklyStripHtml += `
+        <div class="weekly-day ${hasBooking ? 'booked' : ''}">
+          <div style="font-weight:600;font-size:0.75rem;">${dayName}</div>
+          <div style="font-size:1.2rem;font-weight:800;">${dateNum}</div>
+          ${hasBooking ? '<div style="font-size:0.6rem;">Booked</div>' : ''}
+        </div>
+      `;
+    }
+
     container.innerHTML = `
       <div class="hero">
         <div>
@@ -246,6 +307,11 @@ async function renderClientDashboard(container) {
           <p>Rolider Sports Complex · Accra</p>
           <button class="btn-primary" onclick="navigateTo('booking')">Book a Session</button>
         </div>
+      </div>
+
+      <div class="card">
+        <h3>Your Week</h3>
+        <div class="weekly-strip">${weeklyStripHtml}</div>
       </div>
 
       ${!isPaid && userProfile.alertsEnabled ? `
@@ -327,17 +393,7 @@ window.clientSetMonthFromPicker = function(value) {
   }
 };
 
-// Fee calculator
-function getMonthlyFee(weeklySessions) {
-  if (weeklySessions === 1) return 700;
-  if (weeklySessions === 2) return 1200;
-  if (weeklySessions === 3) return 1500;
-  return 0;
-}
-
-// ===================== BOOKING FORM with Date Picker =====================
-let selectedBookingDate = null; // stores selected date from horizontal picker
-
+// ===================== BOOKING FORM (with date picker) =====================
 async function renderBookingForm(container) {
   const now = new Date();
   const weekStart = new Date(now);
@@ -375,7 +431,6 @@ async function renderBookingForm(container) {
     canBook = false;
   }
 
-  // Generate horizontal date picker (7 days from today)
   const datePickerHtml = generateDatePicker();
 
   container.innerHTML = `
@@ -411,7 +466,6 @@ async function renderBookingForm(container) {
     </div>
   `;
 
-  // Attach click events to date pills
   document.querySelectorAll('.date-pill').forEach(pill => {
     pill.addEventListener('click', () => {
       document.querySelectorAll('.date-pill').forEach(p => p.classList.remove('active'));
@@ -470,7 +524,6 @@ async function renderBookingForm(container) {
   });
 }
 
-// Helper to generate 7 date pills
 function generateDatePicker() {
   const today = new Date();
   const dates = [];
@@ -956,10 +1009,18 @@ function renderChatArea(container) {
     messages.forEach(msg => {
       const sender = allUsersCache.find(u => u.uid === msg.senderId);
       const senderName = sender ? (sender.username || sender.name) : 'Unknown';
+      const senderPic = sender?.profilePic || 'default-avatar.png';
       const timeStr = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleString() : '';
       const div = document.createElement('div');
       div.className = `message ${msg.senderId === userProfile.uid ? 'sent' : 'received'}`;
-      div.innerHTML = `<div style="font-weight:bold;font-size:0.75rem;">${escapeHtml(senderName)}</div><div>${escapeHtml(msg.text)}</div><div class="meta"><span>${timeStr}</span></div>`;
+      div.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <img src="${senderPic}" style="width:24px;height:24px;border-radius:50%;" onerror="this.style.display='none'">
+          <span style="font-weight:bold;font-size:0.75rem;">${escapeHtml(senderName)}</span>
+        </div>
+        <div>${escapeHtml(msg.text)}</div>
+        <div class="meta"><span>${timeStr}</span></div>
+      `;
       messagesDiv.appendChild(div);
     });
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -1701,10 +1762,18 @@ window.adminOpenConversation = function(convId) {
     messages.forEach(msg => {
       const sender = allUsersCache.find(u => u.uid === msg.senderId);
       const senderName = sender ? (sender.username || sender.name) : 'Unknown';
+      const senderPic = sender?.profilePic || 'default-avatar.png';
       const timeStr = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleString() : '';
       const div = document.createElement('div');
       div.className = `message ${msg.senderId === currentUser.uid ? 'sent' : 'received'}`;
-      div.innerHTML = `<div style="font-weight:bold;font-size:0.75rem;">${escapeHtml(senderName)}</div><div>${escapeHtml(msg.text)}</div><div class="meta"><span>${timeStr}</span><button class="btn-danger" onclick="deleteMessage('${convId}','${msg.id}')">Delete</button></div>`;
+      div.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <img src="${senderPic}" style="width:24px;height:24px;border-radius:50%;" onerror="this.style.display='none'">
+          <span style="font-weight:bold;font-size:0.75rem;">${escapeHtml(senderName)}</span>
+        </div>
+        <div>${escapeHtml(msg.text)}</div>
+        <div class="meta"><span>${timeStr}</span><button class="btn-danger" onclick="deleteMessage('${convId}','${msg.id}')">Delete</button></div>
+      `;
       messagesDiv.appendChild(div);
     });
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
