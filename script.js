@@ -16,9 +16,15 @@ const ADMIN_EMAILS = [
   'duketennis4@gmail.com'
 ];
 
+// EmailJS configuration – replace with your own keys
+const EMAILJS_SERVICE_ID = 'YOUR_SERVICE_ID';
+const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';
+const EMAILJS_PUBLIC_KEY = 'YOUR_PUBLIC_KEY';
+
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
+const storage = firebase.storage();
 
 // ===================== GLOBAL STATE =====================
 let currentUser = null;
@@ -28,6 +34,7 @@ let currentConversationId = null;
 let allUsersCache = [];
 let currentAttendanceMonth = new Date().toISOString().slice(0,7);
 let clientAttendanceMonth = new Date().toISOString().slice(0,7);
+let messagingTab = 'chats'; // 'chats', 'groups', 'contacts', 'profile'
 
 // ===================== UTILITY FUNCTIONS =====================
 function formatDate(dateStr) {
@@ -49,6 +56,10 @@ function getDecayedPoints(points, lastActive) {
   if (diffWeeks <= 8) return points;
   const extraWeeks = diffWeeks - 8;
   return Math.max(0, Math.round(points * Math.pow(0.9, extraWeeks)));
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
 }
 
 // ===================== GOOGLE SIGN-IN =====================
@@ -115,6 +126,8 @@ async function ensureUserProfile(user) {
       matchesLost: 0,
       username: '',
       gender: '',
+      alertsEnabled: true,
+      paidThroughMonth: '',
       lastActive: firebase.firestore.FieldValue.serverTimestamp(),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
@@ -131,16 +144,13 @@ document.getElementById('saveUsernameBtn').addEventListener('click', async () =>
   const gender = document.getElementById('genderInput').value;
   const errorEl = document.getElementById('usernameError');
   errorEl.textContent = '';
-
   if (!gender) { errorEl.textContent = 'Please select your gender.'; return; }
   if (!username) { errorEl.textContent = 'Username cannot be empty.'; return; }
-
   const q = await db.collection('users').where('username', '==', username).get();
   if (!q.empty && q.docs[0].id !== userProfile.uid) {
     errorEl.textContent = 'Username already taken. Please choose another.';
     return;
   }
-
   await db.collection('users').doc(userProfile.uid).update({ username, gender });
   userProfile.username = username;
   userProfile.gender = gender;
@@ -203,7 +213,6 @@ async function renderClientDashboard(container) {
       while (sessions.length < totalSessions) sessions.push('none');
       if (sessions.length > totalSessions) sessions = sessions.slice(0, totalSessions);
     }
-
     const attendedCount = sessions.filter(s => s === 'attended').length;
 
     const bookingsSnap = await db.collection('bookings').where('userId', '==', userProfile.uid).get();
@@ -217,6 +226,9 @@ async function renderClientDashboard(container) {
     const annSnap = await db.collection('announcements').orderBy('createdAt', 'desc').limit(3).get();
     const announcements = annSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+    const currentMonth = now.toISOString().slice(0,7);
+    const isPaid = userProfile.paidThroughMonth && userProfile.paidThroughMonth >= currentMonth;
+
     const progress = totalSessions > 0 ? Math.min(100, Math.round((attendedCount / totalSessions) * 100)) : 0;
 
     let attendanceGridHtml = '';
@@ -228,20 +240,20 @@ async function renderClientDashboard(container) {
     }
 
     container.innerHTML = `
-      <div class="card" style="background:var(--black);color:var(--white);">
-        <h2 style="color:var(--ball);">Welcome, ${escapeHtml(userProfile.username || userProfile.name)}</h2>
-        <p>${userProfile.skillCategory} Player</p>
-        <div class="grid-2" style="margin-top:16px;">
-          <div class="stat-card" style="background:rgba(255,255,255,0.08);color:white;">
-            <div class="value">${weeklyLimit}x</div>
-            <div class="label">per week</div>
-          </div>
-          <div class="stat-card" style="background:rgba(255,255,255,0.08);color:white;">
-            <div class="value">${attendedCount}/${totalSessions}</div>
-            <div class="label">attended this month</div>
-          </div>
+      <div class="hero">
+        <div>
+          <h1>Welcome, ${escapeHtml(userProfile.username || userProfile.name)}</h1>
+          <p>Rolider Sports Complex · Accra</p>
+          <button class="btn-primary" onclick="navigateTo('booking')">Book a Session</button>
         </div>
       </div>
+
+      ${!isPaid && userProfile.alertsEnabled ? `
+        <div class="card" style="background:var(--ball);color:var(--black);">
+          <h3>Payment Reminder</h3>
+          <p>Your monthly fee of GHS ${getMonthlyFee(weeklyLimit)} is due. Please settle to continue booking future sessions.</p>
+        </div>
+      ` : ''}
 
       <div class="card">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -297,7 +309,7 @@ async function renderClientDashboard(container) {
     `;
   } catch (error) {
     console.error('Dashboard error:', error);
-    container.innerHTML = `<div class="card"><p>Error loading dashboard: ${error.message}</p><p>Please check your permissions or contact admin.</p></div>`;
+    container.innerHTML = `<div class="card"><p>Error loading dashboard: ${error.message}</p></div>`;
   }
 }
 
@@ -315,45 +327,13 @@ window.clientSetMonthFromPicker = function(value) {
   }
 };
 
-// ===================== REVIEW PROMPT =====================
-window.showReviewPrompt = function(bookingId, date, programType) {
-  const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:300;';
-  modal.innerHTML = `
-    <div class="card" style="max-width:400px;width:100%;">
-      <h3>Review Session</h3>
-      <p>${escapeHtml(programType)} on ${formatDate(date)}</p>
-      <select id="reviewRating">
-        <option value="5">5 - Excellent</option>
-        <option value="4">4 - Good</option>
-        <option value="3">3 - Average</option>
-        <option value="2">2 - Poor</option>
-        <option value="1">1 - Terrible</option>
-      </select>
-      <textarea id="reviewComment" rows="3" placeholder="Share your experience..."></textarea>
-      <div>
-        <button class="btn-primary" id="submitReviewBtn">Submit</button>
-        <button class="btn-outline" id="cancelReviewBtn">Cancel</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
-  document.getElementById('cancelReviewBtn').addEventListener('click', () => modal.remove());
-  document.getElementById('submitReviewBtn').addEventListener('click', async () => {
-    const rating = parseInt(document.getElementById('reviewRating').value);
-    const comment = document.getElementById('reviewComment').value.trim();
-    if (!rating) return;
-    try {
-      await db.collection('reviews').add({
-        bookingId, userId: userProfile.uid, rating, comment,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      alert('Thank you for your review!');
-      modal.remove();
-      renderCurrentScreen();
-    } catch (error) { alert('Failed: ' + error.message); }
-  });
-};
+// Fee calculator
+function getMonthlyFee(weeklySessions) {
+  if (weeklySessions === 1) return 700;
+  if (weeklySessions === 2) return 1200;
+  if (weeklySessions === 3) return 1500;
+  return 0;
+}
 
 // ===================== BOOKING FORM =====================
 async function renderBookingForm(container) {
@@ -362,16 +342,42 @@ async function renderBookingForm(container) {
   weekStart.setDate(now.getDate() - now.getDay());
   const weekStartStr = weekStart.toISOString().split('T')[0];
 
+  const currentMonth = now.toISOString().slice(0,7);
+  const paidThroughMonth = userProfile.paidThroughMonth || '';
+  const isPaid = paidThroughMonth >= currentMonth;
+
+  let futureBookingsBeyondPaid = 0;
+  if (!isPaid && paidThroughMonth) {
+    const bookingsSnap = await db.collection('bookings')
+      .where('userId', '==', userProfile.uid)
+      .where('status', '!=', 'cancelled')
+      .get();
+    const bookings = bookingsSnap.docs.map(d => d.data());
+    const paidMonth = paidThroughMonth + '-01';
+    futureBookingsBeyondPaid = bookings.filter(b => b.date >= paidMonth).length;
+  }
+
+  const weeklyLimit = userProfile.weeklySessions || 1;
   const weekBookingsSnap = await db.collection('bookings').where('userId', '==', userProfile.uid).get();
   const weekBookings = weekBookingsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const activeWeekBookings = weekBookings.filter(b => (b.status === 'booked' || b.status === 'attended') && b.date >= weekStartStr);
-  const weeklyLimit = userProfile.weeklySessions || 1;
+  const weeklyCount = activeWeekBookings.length;
+
+  let bookingRestrictionMsg = '';
+  let canBook = true;
+  if (!isPaid && paidThroughMonth && futureBookingsBeyondPaid >= 2) {
+    bookingRestrictionMsg = '<p style="color:red;">You have reached the maximum of 2 future bookings without payment. Please settle your fees.</p>';
+    canBook = false;
+  } else if (weeklyCount >= weeklyLimit) {
+    bookingRestrictionMsg = '<p style="color:red;">You have reached your weekly booking limit.</p>';
+    canBook = false;
+  }
 
   container.innerHTML = `
     <div class="card">
       <h3>Book a Session</h3>
-      <p>Weekly bookings: ${activeWeekBookings.length} / ${weeklyLimit}</p>
-      ${activeWeekBookings.length >= weeklyLimit ? '<p style="color:red;">You have reached your weekly limit.</p>' : ''}
+      <p>Weekly bookings: ${weeklyCount} / ${weeklyLimit}</p>
+      ${bookingRestrictionMsg}
       <form id="bookingForm">
         <label>Date</label>
         <input type="date" id="bookingDate" required min="${now.toISOString().split('T')[0]}" />
@@ -382,7 +388,7 @@ async function renderBookingForm(container) {
           <option>Kids Training</option>
           <option>Cardio Tennis</option>
         </select>
-        <button type="submit" class="btn-primary" ${activeWeekBookings.length >= weeklyLimit ? 'disabled' : ''}>Confirm Booking</button>
+        <button type="submit" class="btn-primary" ${canBook ? '' : 'disabled'}>Confirm Booking</button>
       </form>
     </div>
   `;
@@ -392,11 +398,27 @@ async function renderBookingForm(container) {
     const date = document.getElementById('bookingDate').value;
     const program = document.getElementById('programType').value;
     if (!date) return alert('Please select a date.');
-    
+
+    if (!isPaid && paidThroughMonth) {
+      const monthOfBooking = date.slice(0,7);
+      if (monthOfBooking > paidThroughMonth) {
+        const futureCount = await db.collection('bookings')
+          .where('userId', '==', userProfile.uid)
+          .where('date', '>=', paidThroughMonth + '-01')
+          .where('status', '!=', 'cancelled')
+          .get()
+          .then(snap => snap.size);
+        if (futureCount >= 2) {
+          alert('You cannot book more than 2 sessions beyond your paid month. Please pay to continue.');
+          return;
+        }
+      }
+    }
+
     if (!confirm('Cancellation policy: Bookings must be made at least 48 hours in advance. Cancellations require 6 hours notice. Do you agree?')) {
       return;
     }
-    
+
     try {
       const bookingRef = await db.collection('bookings').add({
         userId: userProfile.uid,
@@ -454,7 +476,7 @@ async function renderAnnouncements(container) {
   `).join('');
 }
 
-// ===================== ALERTS (NOTIFICATIONS) =====================
+// ===================== ALERTS =====================
 async function renderAlerts(container) {
   container.innerHTML = '<p>Loading...</p>';
   try {
@@ -462,13 +484,11 @@ async function renderAlerts(container) {
       .where('sentTo', 'array-contains', userProfile.uid)
       .get();
     const notifications = notifSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
     notifications.sort((a, b) => {
       const timeA = a.createdAt?.toDate?.() || new Date(0);
       const timeB = b.createdAt?.toDate?.() || new Date(0);
       return timeB - timeA;
     });
-
     container.innerHTML = notifications.length === 0
       ? '<div class="card"><p>No notifications.</p></div>'
       : notifications.map(n => {
@@ -483,7 +503,6 @@ async function renderAlerts(container) {
           `;
         }).join('');
   } catch (error) {
-    console.error('Error loading alerts:', error);
     container.innerHTML = `<div class="card"><p>Error loading notifications: ${error.message}</p></div>`;
   }
 }
@@ -501,7 +520,7 @@ window.markNotifRead = async function(notifId) {
   renderAlerts(document.getElementById('mainContent'));
 };
 
-// ===================== RANKINGS & H2H (Gender-based) =====================
+// ===================== RANKINGS & H2H =====================
 async function renderRankings(container) {
   container.innerHTML = '<p>Loading...</p>';
   const usersSnap = await db.collection('users').where('role', '==', 'client').get();
@@ -607,48 +626,246 @@ async function renderRankings(container) {
 
 // ===================== MESSAGING =====================
 async function renderMessaging(container) {
-  container.innerHTML = '<div class="card"><p>Loading...</p></div>';
+  container.innerHTML = `
+    <div class="messaging-sub-nav">
+      <button class="messaging-sub-btn ${messagingTab === 'chats' ? 'active' : ''}" data-msgtab="chats">Chats</button>
+      <button class="messaging-sub-btn ${messagingTab === 'groups' ? 'active' : ''}" data-msgtab="groups">Groups</button>
+      <button class="messaging-sub-btn ${messagingTab === 'contacts' ? 'active' : ''}" data-msgtab="contacts">Contacts</button>
+      <button class="messaging-sub-btn ${messagingTab === 'profile' ? 'active' : ''}" data-msgtab="profile">Profile</button>
+    </div>
+    <div id="messagingContent"></div>
+  `;
+
+  document.querySelectorAll('.messaging-sub-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      messagingTab = btn.dataset.msgtab;
+      renderMessaging(container);
+    });
+  });
+
+  const subContainer = document.getElementById('messagingContent');
+  switch (messagingTab) {
+    case 'chats': renderChatsList(subContainer); break;
+    case 'groups': renderGroupsList(subContainer); break;
+    case 'contacts': renderContactsList(subContainer); break;
+    case 'profile': renderProfile(subContainer); break;
+    default: renderChatsList(subContainer);
+  }
+}
+
+async function renderChatsList(container) {
+  container.innerHTML = '<p>Loading chats...</p>';
   try {
     const usersSnap = await db.collection('users').get();
     allUsersCache = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
-    const convSnap = await db.collection('conversations').get();
+    const convSnap = await db.collection('conversations')
+      .where('participants', 'array-contains', userProfile.uid)
+      .get();
     const conversations = convSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const userConvs = conversations.filter(c => c.participants && c.participants.includes(userProfile.uid));
+
+    let html = '';
+    const generalConv = conversations.find(c => c.id === 'general');
+    if (generalConv) {
+      html += `<div class="card" style="cursor:pointer;" onclick="openConversation('general')">
+        <strong>General Community</strong>
+        <div>${generalConv.lastMessage || 'No messages'}</div>
+      </div>`;
+    } else {
+      html += `<div class="card" style="cursor:pointer;" onclick="createGeneralChat()">
+        <strong>General Community</strong>
+        <div>Tap to create</div>
+      </div>`;
+    }
+
+    const adminUser = allUsersCache.find(u => ADMIN_EMAILS.includes(u.email));
+    if (adminUser) {
+      const coachConv = conversations.find(c => c.type === 'direct' && c.participants.includes(adminUser.uid));
+      if (coachConv) {
+        html += `<div class="card" style="cursor:pointer;" onclick="openConversation('${coachConv.id}')">
+          <strong>Coach ${adminUser.username || adminUser.name}</strong>
+          <div>${coachConv.lastMessage || 'No messages'}</div>
+        </div>`;
+      } else {
+        html += `<div class="card" style="cursor:pointer;" onclick="startCoachChat('${adminUser.uid}')">
+          <strong>Coach ${adminUser.username || adminUser.name}</strong>
+          <div>Tap to message</div>
+        </div>`;
+      }
+    }
+
+    const otherDirectChats = conversations.filter(c => c.type === 'direct' && c.id !== 'general' && !(adminUser && c.participants.includes(adminUser.uid)));
+    otherDirectChats.forEach(c => {
+      const otherUid = c.participants.find(p => p !== userProfile.uid);
+      const otherUser = allUsersCache.find(u => u.uid === otherUid);
+      html += `<div class="card" style="cursor:pointer;" onclick="openConversation('${c.id}')">
+        <strong>${otherUser?.username || 'Unknown'}</strong>
+        <div>${c.lastMessage || 'No messages'}</div>
+      </div>`;
+    });
+
+    html += `<button class="btn-outline" onclick="showNewDirect()">New Private Chat</button>`;
+
+    container.innerHTML = html || '<p>No chats yet.</p>';
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error: ${error.message}</p></div>`;
+  }
+}
+
+async function renderGroupsList(container) {
+  container.innerHTML = '<p>Loading groups...</p>';
+  try {
+    const convSnap = await db.collection('conversations')
+      .where('type', '==', 'group')
+      .where('participants', 'array-contains', userProfile.uid)
+      .get();
+    const groups = convSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    container.innerHTML = groups.length === 0 ? '<div class="card"><p>No groups.</p></div>' :
+      groups.map(g => `<div class="card" style="cursor:pointer;" onclick="openConversation('${g.id}')">
+        <strong>Group</strong>
+        <div>${g.lastMessage || 'No messages'}</div>
+      </div>`).join('');
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error: ${error.message}</p></div>`;
+  }
+}
+
+async function renderContactsList(container) {
+  container.innerHTML = '<p>Loading contacts...</p>';
+  try {
+    const usersSnap = await db.collection('users').get();
+    const users = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.uid !== userProfile.uid);
+    let html = '<div class="card"><h3>All Users</h3>';
+    users.forEach(u => {
+      html += `<div style="display:flex;align-items:center;gap:12px;padding:8px;border-bottom:1px solid var(--gray-100);">
+        <div style="width:40px;height:40px;border-radius:50%;background:var(--ball);display:flex;align-items:center;justify-content:center;font-weight:bold;">${u.username?.[0] || '?'}</div>
+        <div style="flex:1;"><strong>${escapeHtml(u.username || u.name)}</strong><div style="font-size:0.8rem;color:var(--gray-600);">${u.role}</div></div>
+        <button class="btn-outline" style="padding:4px 10px;" onclick="startDirectChat('${u.uid}')">Message</button>
+      </div>`;
+    });
+    html += '</div>';
+    container.innerHTML = html;
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error: ${error.message}</p></div>`;
+  }
+}
+
+async function renderProfile(container) {
+  container.innerHTML = '<p>Loading profile...</p>';
+  try {
+    const userDoc = await db.collection('users').doc(userProfile.uid).get();
+    const profile = userDoc.data() || userProfile;
+    const profilePicUrl = profile.profilePic || 'default-avatar.png';
+    const coverUrl = profile.coverPic || '';
 
     container.innerHTML = `
-      <div class="card">
-        <h3>Messages</h3>
-        <button class="btn-primary" onclick="openConversation('general')">General Chat</button>
-        <button class="btn-outline" onclick="showNewDirect()">New Direct</button>
-        <button class="btn-outline" onclick="showNewGroup()">New Group</button>
-        <div id="newConversationArea"></div>
-        <div id="conversationList">
-          ${userConvs.length === 0 ? '<p>No conversations.</p>' : ''}
-          ${userConvs.map(c => {
-            const others = c.participants.filter(p => p !== userProfile.uid);
-            const names = others.map(pid => allUsersCache.find(u => u.uid === pid)?.username || 'Unknown').join(', ');
-            return `<div class="card" style="cursor:pointer;" onclick="openConversation('${c.id}')"><strong>${c.type==='direct'?'Direct':'Group'}: ${names}</strong><div>${c.lastMessage || 'No messages'}</div></div>`;
-          }).join('')}
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div class="profile-cover">
+          ${coverUrl ? `<img src="${coverUrl}" alt="cover">` : ''}
+        </div>
+        <div style="padding:0 20px 20px;">
+          <div class="profile-picture">
+            <img src="${profilePicUrl}" alt="profile">
+          </div>
+          <h3 style="text-align:center;">${escapeHtml(profile.username || profile.name)}</h3>
+          <p style="text-align:center;color:var(--gray-600);">${profile.role}</p>
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <label class="btn-outline" style="flex:1;text-align:center;cursor:pointer;">
+              Change Profile Picture
+              <input type="file" accept="image/*" style="display:none;" onchange="uploadProfilePic(this)">
+            </label>
+            <label class="btn-outline" style="flex:1;text-align:center;cursor:pointer;">
+              Change Cover
+              <input type="file" accept="image/*" style="display:none;" onchange="uploadCoverPic(this)">
+            </label>
+          </div>
         </div>
       </div>
-      <div id="chatArea"></div>
     `;
-  } catch (error) { container.innerHTML = `<div class="card"><p>Error: ${error.message}</p></div>`; }
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error: ${error.message}</p></div>`;
+  }
 }
+
+window.uploadProfilePic = async function(input) {
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    const storageRef = storage.ref(`profile_pics/${userProfile.uid}`);
+    await storageRef.put(file);
+    const url = await storageRef.getDownloadURL();
+    await db.collection('users').doc(userProfile.uid).update({ profilePic: url });
+    userProfile.profilePic = url;
+    alert('Profile picture updated.');
+    renderProfile(document.getElementById('messagingContent'));
+  } catch (error) {
+    alert('Upload failed: ' + error.message);
+  }
+};
+
+window.uploadCoverPic = async function(input) {
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    const storageRef = storage.ref(`cover_pics/${userProfile.uid}`);
+    await storageRef.put(file);
+    const url = await storageRef.getDownloadURL();
+    await db.collection('users').doc(userProfile.uid).update({ coverPic: url });
+    userProfile.coverPic = url;
+    alert('Cover updated.');
+    renderProfile(document.getElementById('messagingContent'));
+  } catch (error) {
+    alert('Upload failed: ' + error.message);
+  }
+};
 
 window.openConversation = function(convId) {
   currentConversationId = convId;
-  renderChatArea(convId);
+  renderChatArea(document.getElementById('messagingContent'));
+};
+
+window.startDirectChat = async function(otherUid) {
+  const participants = [userProfile.uid, otherUid].sort();
+  try {
+    const existing = await db.collection('conversations')
+      .where('participants', '==', participants)
+      .where('type', '==', 'direct')
+      .get();
+    if (!existing.empty) {
+      openConversation(existing.docs[0].id);
+    } else {
+      const convRef = await db.collection('conversations').add({
+        participants,
+        type: 'direct',
+        lastMessage: '',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      openConversation(convRef.id);
+    }
+  } catch (error) { alert('Error: ' + error.message); }
+};
+
+window.startCoachChat = async function(adminUid) {
+  await startDirectChat(adminUid);
+};
+
+window.createGeneralChat = async function() {
+  try {
+    await db.collection('conversations').doc('general').set({
+      participants: [],
+      type: 'general',
+      lastMessage: '',
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    openConversation('general');
+  } catch (error) { alert('Error: ' + error.message); }
 };
 
 window.showNewDirect = function() {
-  const area = document.getElementById('newConversationArea');
+  const area = document.getElementById('messagingContent');
   area.innerHTML = `<div class="card"><h4>Start Direct</h4><select id="directUserSelect"><option>Select user...</option>${allUsersCache.filter(u=>u.uid!==userProfile.uid).map(u=>`<option value="${u.uid}">${escapeHtml(u.username||u.name)}</option>`).join('')}</select><button class="btn-primary" onclick="createDirectConversation()">Start</button></div>`;
 };
-window.showNewGroup = function() {
-  const area = document.getElementById('newConversationArea');
-  area.innerHTML = `<div class="card"><h4>Create Group</h4><select id="groupUserSelect" multiple style="height:120px;">${allUsersCache.filter(u=>u.uid!==userProfile.uid).map(u=>`<option value="${u.uid}">${escapeHtml(u.username||u.name)}</option>`).join('')}</select><button class="btn-primary" onclick="createGroupConversation()">Create</button></div>`;
-};
+
 window.createDirectConversation = async function() {
   const otherUid = document.getElementById('directUserSelect').value;
   if (!otherUid) return alert('Select a user');
@@ -658,19 +875,20 @@ window.createDirectConversation = async function() {
     openConversation(convRef.id);
   } catch (error) { alert('Failed: ' + error.message); }
 };
-window.createGroupConversation = async function() {
-  const selected = Array.from(document.getElementById('groupUserSelect').selectedOptions).map(o=>o.value);
-  if (!selected.length) return alert('Select participants');
-  const participants = [userProfile.uid, ...selected].sort();
-  try {
-    const convRef = await db.collection('conversations').add({ participants, type:'group', lastMessage:'', createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-    openConversation(convRef.id);
-  } catch (error) { alert('Failed: ' + error.message); }
-};
 
-function renderChatArea(convId) {
-  const chatArea = document.getElementById('chatArea');
-  chatArea.innerHTML = `<div class="chat-container"><div class="chat-header">Chat</div><div class="chat-messages" id="chatMessages">Loading...</div><div class="chat-input"><input id="messageInput" placeholder="Type..."><button class="btn-primary" id="sendMessageBtn">Send</button></div></div>`;
+function renderChatArea(container) {
+  const convId = currentConversationId;
+  container.innerHTML = `
+    <div class="chat-container">
+      <div class="chat-header">Chat</div>
+      <div class="chat-messages" id="chatMessages">Loading...</div>
+      <div class="chat-input">
+        <input type="text" id="messageInput" placeholder="Type a message..." />
+        <button class="btn-primary" id="sendMessageBtn" style="width:auto;">Send</button>
+      </div>
+    </div>
+  `;
+
   const messagesDiv = document.getElementById('chatMessages');
   const messageInput = document.getElementById('messageInput');
   const messagesRef = db.collection('conversations').doc(convId).collection('messages');
@@ -686,27 +904,73 @@ function renderChatArea(convId) {
       const timeStr = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleString() : '';
       const div = document.createElement('div');
       div.className = `message ${msg.senderId === userProfile.uid ? 'sent' : 'received'}`;
-      div.innerHTML = `<div style="font-weight:bold;font-size:0.75rem;">${escapeHtml(senderName)}</div><div>${escapeHtml(msg.text)}</div><div class="meta"><span>${timeStr}</span>${userProfile.role==='admin'?`<button class="btn-danger" onclick="deleteMessage('${convId}','${msg.id}')">Delete</button>`:''}</div>`;
+      div.innerHTML = `<div style="font-weight:bold;font-size:0.75rem;">${escapeHtml(senderName)}</div><div>${escapeHtml(msg.text)}</div><div class="meta"><span>${timeStr}</span></div>`;
       messagesDiv.appendChild(div);
     });
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   });
+
   async function sendMessage() {
     const text = messageInput.value.trim();
     if (!text) return;
     try {
       const convRef = db.collection('conversations').doc(convId);
-      await convRef.collection('messages').add({ senderId: userProfile.uid, text, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+      await convRef.collection('messages').add({
+        senderId: userProfile.uid,
+        text,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
       await convRef.update({ lastMessage: text, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
       messageInput.value = '';
     } catch (error) { alert('Failed: ' + error.message); }
   }
+
   document.getElementById('sendMessageBtn').addEventListener('click', sendMessage);
-  messageInput.addEventListener('keypress', (e) => { if (e.key==='Enter') sendMessage(); });
+  messageInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
 }
 
 window.deleteMessage = async function(convId, msgId) {
   if (confirm('Delete this message?')) await db.collection('conversations').doc(convId).collection('messages').doc(msgId).delete();
+};
+
+// ===================== REVIEW PROMPT =====================
+window.showReviewPrompt = function(bookingId, date, programType) {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:300;';
+  modal.innerHTML = `
+    <div class="card" style="max-width:400px;width:100%;">
+      <h3>Review Session</h3>
+      <p>${escapeHtml(programType)} on ${formatDate(date)}</p>
+      <select id="reviewRating">
+        <option value="5">5 - Excellent</option>
+        <option value="4">4 - Good</option>
+        <option value="3">3 - Average</option>
+        <option value="2">2 - Poor</option>
+        <option value="1">1 - Terrible</option>
+      </select>
+      <textarea id="reviewComment" rows="3" placeholder="Share your experience..."></textarea>
+      <div>
+        <button class="btn-primary" id="submitReviewBtn">Submit</button>
+        <button class="btn-outline" id="cancelReviewBtn">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  document.getElementById('cancelReviewBtn').addEventListener('click', () => modal.remove());
+  document.getElementById('submitReviewBtn').addEventListener('click', async () => {
+    const rating = parseInt(document.getElementById('reviewRating').value);
+    const comment = document.getElementById('reviewComment').value.trim();
+    if (!rating) return;
+    try {
+      await db.collection('reviews').add({
+        bookingId, userId: userProfile.uid, rating, comment,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      alert('Thank you for your review!');
+      modal.remove();
+      renderCurrentScreen();
+    } catch (error) { alert('Failed: ' + error.message); }
+  });
 };
 
 // ===================== ADMIN =====================
@@ -724,6 +988,7 @@ function renderAdmin() {
       <button class="tab-btn" data-admin-tab="messages">Messages</button>
       <button class="tab-btn" data-admin-tab="reviews">Reviews</button>
       <button class="tab-btn" data-admin-tab="notifications">Notifications</button>
+      <button class="tab-btn" data-admin-tab="billing">Billing</button>
     </div>
     <div id="adminContent"></div>
   `;
@@ -748,6 +1013,7 @@ async function renderAdminTab(tab) {
     case 'messages': await renderAdminMessages(container); break;
     case 'reviews': await renderAdminReviews(container); break;
     case 'notifications': await renderAdminNotifications(container); break;
+    case 'billing': await renderAdminBilling(container); break;
   }
 }
 
@@ -989,7 +1255,7 @@ async function renderAdminAnnouncements(container) {
 }
 window.deleteAnnouncement = async function(id) { if (confirm('Delete?')) { await db.collection('announcements').doc(id).delete(); renderAdminTab('announcements'); } };
 
-// ===================== ADMIN USERS (with add/remove & gender) =====================
+// ===================== ADMIN USERS =====================
 async function renderAdminUsers(container) {
   container.innerHTML = '<p>Loading...</p>';
   const usersSnap = await db.collection('users').get();
@@ -1034,24 +1300,14 @@ async function renderAdminUsers(container) {
       const userCredential = await auth.createUserWithEmailAndPassword(email, password);
       await userCredential.user.updateProfile({ displayName: name });
       await db.collection('users').doc(userCredential.user.uid).set({
-        uid: userCredential.user.uid,
-        email,
-        name,
-        role,
-        gender,
-        weeklySessions: 1,
-        points: 0,
-        matchesWon: 0,
-        matchesLost: 0,
-        username: '',
-        lastActive: firebase.firestore.FieldValue.serverTimestamp(),
+        uid: userCredential.user.uid, email, name, role, gender,
+        weeklySessions: 1, points: 0, matchesWon: 0, matchesLost: 0,
+        username: '', lastActive: firebase.firestore.FieldValue.serverTimestamp(),
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       alert('User created successfully.');
       renderAdminTab('users');
-    } catch (error) {
-      alert('Failed to create user: ' + error.message);
-    }
+    } catch (error) { alert('Failed to create user: ' + error.message); }
   });
 }
 
@@ -1075,12 +1331,10 @@ window.removeUser = async function(uid) {
     await batch.commit();
     alert('User removed.');
     renderAdminTab('users');
-  } catch (error) {
-    alert('Failed to remove user: ' + error.message);
-  }
+  } catch (error) { alert('Failed to remove user: ' + error.message); }
 };
 
-// ===================== ADMIN RANKINGS (with point adjustment) =====================
+// ===================== ADMIN RANKINGS =====================
 async function renderAdminRankings(container) {
   const playersSnap = await db.collection('users').where('role', '==', 'client').get();
   const players = playersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
@@ -1136,7 +1390,7 @@ async function renderAdminRankings(container) {
   });
 }
 
-// ===================== ADMIN REVIEWS (grouped by month) =====================
+// ===================== ADMIN REVIEWS =====================
 async function renderAdminReviews(container) {
   container.innerHTML = '<p>Loading reviews...</p>';
   try {
@@ -1188,12 +1442,10 @@ async function renderAdminReviews(container) {
 // ===================== ADMIN NOTIFICATIONS =====================
 async function renderAdminNotifications(container) {
   container.innerHTML = '<p>Loading...</p>';
-
   if (allUsersCache.length === 0) {
     const usersSnap = await db.collection('users').get();
     allUsersCache = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
   }
-
   const notificationsSnap = await db.collection('notifications').orderBy('createdAt', 'desc').get();
   const notifications = notificationsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
@@ -1231,23 +1483,32 @@ async function renderAdminNotifications(container) {
     const body = document.getElementById('notifBody').value.trim();
     const target = document.getElementById('notifTarget').value;
     if (!title || !body) return alert('Please fill title and message.');
-
     let sentTo = [];
     if (target === 'all') {
       sentTo = allUsersCache.filter(u => u.role === 'client').map(u => u.uid);
     } else {
       sentTo = [target];
     }
-
     try {
       await db.collection('notifications').add({
-        title,
-        body,
-        sentTo,
-        createdBy: currentUser.uid,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-        readBy: []
+        title, body, sentTo, createdBy: currentUser.uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: []
       });
+      // Send email via EmailJS if configured
+      if (EMAILJS_SERVICE_ID !== 'YOUR_SERVICE_ID') {
+        emailjs.init(EMAILJS_PUBLIC_KEY);
+        for (const uid of sentTo) {
+          const user = allUsersCache.find(u => u.uid === uid);
+          if (user && user.email) {
+            await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+              to_email: user.email,
+              to_name: user.username || user.name,
+              title: title,
+              message: body
+            });
+          }
+        }
+      }
       alert('Notification sent.');
       renderAdminTab('notifications');
     } catch (error) {
@@ -1255,6 +1516,90 @@ async function renderAdminNotifications(container) {
     }
   });
 }
+
+// ===================== ADMIN BILLING =====================
+async function renderAdminBilling(container) {
+  container.innerHTML = '<p>Loading billing...</p>';
+  try {
+    const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+    const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const currentMonth = new Date().toISOString().slice(0,7);
+
+    let tableHtml = `<table>
+      <tr><th>Client</th><th>Plan</th><th>Monthly Fee (GHS)</th><th>Paid Through</th><th>Status</th><th>Alerts</th><th>Action</th></tr>`;
+    clients.forEach(client => {
+      const weekly = client.weeklySessions || 1;
+      const fee = getMonthlyFee(weekly);
+      const paidThrough = client.paidThroughMonth || '';
+      const isPaid = paidThrough >= currentMonth;
+      tableHtml += `<tr>
+        <td>${escapeHtml(client.username || client.name)}</td>
+        <td>${weekly}x per week</td>
+        <td>${fee}</td>
+        <td>${paidThrough || 'Not set'}</td>
+        <td><span class="badge ${isPaid ? 'badge-green' : 'badge-red'}">${isPaid ? 'Paid' : 'Unpaid'}</span></td>
+        <td><input type="checkbox" ${client.alertsEnabled ? 'checked' : ''} onchange="toggleAlertsAdmin('${client.uid}', this.checked)"></td>
+        <td>${isPaid ? '' : `<button class="btn-outline" onclick="markPaid('${client.uid}', '${currentMonth}')">Mark Paid</button>`}</td>
+      </tr>`;
+    });
+    tableHtml += `</table>`;
+
+    container.innerHTML = `
+      <div class="card">
+        <h3>Client Billing</h3>
+        ${tableHtml}
+        <button class="btn-primary" onclick="sendPaymentReminders()">Send Payment Reminders</button>
+      </div>
+    `;
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error: ${error.message}</p></div>`;
+  }
+}
+
+window.toggleAlertsAdmin = async function(uid, enabled) {
+  await db.collection('users').doc(uid).update({ alertsEnabled: enabled });
+  renderAdminBilling(document.getElementById('adminContent'));
+};
+
+window.markPaid = async function(uid, month) {
+  await db.collection('users').doc(uid).update({ paidThroughMonth: month });
+  alert('Marked as paid through ' + month);
+  renderAdminBilling(document.getElementById('adminContent'));
+};
+
+window.sendPaymentReminders = async function() {
+  try {
+    const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+    const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const currentMonth = new Date().toISOString().slice(0,7);
+
+    for (const client of clients) {
+      if ((!client.paidThroughMonth || client.paidThroughMonth < currentMonth) && client.alertsEnabled) {
+        const fee = getMonthlyFee(client.weeklySessions || 1);
+        await db.collection('notifications').add({
+          title: 'Payment Reminder',
+          body: `Your monthly fee of GHS ${fee} is due. Please settle to continue booking future sessions.`,
+          sentTo: [client.uid],
+          createdBy: currentUser.uid,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          readBy: []
+        });
+        if (EMAILJS_SERVICE_ID !== 'YOUR_SERVICE_ID') {
+          emailjs.init(EMAILJS_PUBLIC_KEY);
+          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+            to_email: client.email,
+            to_name: client.username || client.name,
+            title: 'Payment Reminder',
+            message: `Your monthly fee of GHS ${fee} is due.`
+          });
+        }
+      }
+    }
+    alert('Payment reminders sent.');
+  } catch (error) {
+    alert('Failed to send reminders: ' + error.message);
+  }
+};
 
 // ===================== ADMIN MESSAGES =====================
 async function renderAdminMessages(container) {
