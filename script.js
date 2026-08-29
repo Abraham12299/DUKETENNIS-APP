@@ -177,6 +177,7 @@ function renderCurrentScreen() {
       case 'booking': renderBookingForm(content); title.textContent = 'Book a Session'; break;
       case 'bookings': renderMyBookings(content); title.textContent = 'My Bookings'; break;
       case 'announcements': renderAnnouncements(content); title.textContent = 'Coach News'; break;
+      case 'alerts': renderAlerts(content); title.textContent = 'Alerts'; break;
       case 'rankings': renderRankings(content); title.textContent = 'Rankings & H2H'; break;
       case 'messages': renderMessaging(content); title.textContent = 'Messages'; break;
       default: renderClientDashboard(content); title.textContent = 'Dashboard';
@@ -447,6 +448,43 @@ async function renderAnnouncements(container) {
   `).join('');
 }
 
+// ===================== ALERTS (NOTIFICATIONS) =====================
+async function renderAlerts(container) {
+  container.innerHTML = '<p>Loading...</p>';
+  const notifSnap = await db.collection('notifications')
+    .where('sentTo', 'array-contains', userProfile.uid)
+    .orderBy('createdAt', 'desc')
+    .get();
+  const notifications = notifSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  container.innerHTML = notifications.length === 0
+    ? '<div class="card"><p>No notifications.</p></div>'
+    : notifications.map(n => {
+        const isRead = n.readBy && n.readBy.includes(userProfile.uid);
+        return `
+          <div class="card" style="${isRead ? '' : 'border-left:4px solid var(--ball);'}">
+            <h3>${escapeHtml(n.title)}</h3>
+            <p>${escapeHtml(n.body)}</p>
+            <small>${new Date(n.createdAt?.toDate()).toLocaleString()}</small>
+            ${!isRead ? `<button class="btn-outline" onclick="markNotifRead('${n.id}')">Mark as read</button>` : ''}
+          </div>
+        `;
+      }).join('');
+}
+
+window.markNotifRead = async function(notifId) {
+  const notifRef = db.collection('notifications').doc(notifId);
+  const doc = await notifRef.get();
+  if (doc.exists) {
+    const readBy = doc.data().readBy || [];
+    if (!readBy.includes(userProfile.uid)) {
+      readBy.push(userProfile.uid);
+      await notifRef.update({ readBy });
+    }
+  }
+  renderAlerts(document.getElementById('mainContent'));
+};
+
 // ===================== RANKINGS & H2H (Gender-based) =====================
 async function renderRankings(container) {
   container.innerHTML = '<p>Loading...</p>';
@@ -669,6 +707,7 @@ function renderAdmin() {
       <button class="tab-btn" data-admin-tab="rankings">Rankings</button>
       <button class="tab-btn" data-admin-tab="messages">Messages</button>
       <button class="tab-btn" data-admin-tab="reviews">Reviews</button>
+      <button class="tab-btn" data-admin-tab="notifications">Notifications</button>
     </div>
     <div id="adminContent"></div>
   `;
@@ -692,6 +731,7 @@ async function renderAdminTab(tab) {
     case 'rankings': await renderAdminRankings(container); break;
     case 'messages': await renderAdminMessages(container); break;
     case 'reviews': await renderAdminReviews(container); break;
+    case 'notifications': await renderAdminNotifications(container); break;
   }
 }
 
@@ -1127,6 +1167,71 @@ async function renderAdminReviews(container) {
   } catch (error) {
     container.innerHTML = `<div class="card"><p>Error loading reviews: ${error.message}</p></div>`;
   }
+}
+
+// ===================== ADMIN NOTIFICATIONS =====================
+async function renderAdminNotifications(container) {
+  container.innerHTML = '<p>Loading...</p>';
+  const notificationsSnap = await db.collection('notifications').orderBy('createdAt', 'desc').get();
+  const notifications = notificationsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>Send Notification</h3>
+      <form id="notificationForm">
+        <label>Title</label>
+        <input type="text" id="notifTitle" required />
+        <label>Message</label>
+        <textarea id="notifBody" rows="4" required></textarea>
+        <label>Send To</label>
+        <select id="notifTarget">
+          <option value="all">All Clients</option>
+          ${allUsersCache.filter(u => u.role === 'client').map(u => `<option value="${u.uid}">${escapeHtml(u.username || u.name)}</option>`).join('')}
+        </select>
+        <button type="submit" class="btn-primary">Send Notification</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Sent Notifications</h3>
+      ${notifications.length === 0 ? '<p>No notifications sent.</p>' : notifications.map(n => `
+        <div style="border-bottom:1px solid var(--gray-100);padding:8px 0;">
+          <strong>${escapeHtml(n.title)}</strong>
+          <p>${escapeHtml(n.body)}</p>
+          <small>${new Date(n.createdAt?.toDate()).toLocaleString()}</small>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  document.getElementById('notificationForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const title = document.getElementById('notifTitle').value.trim();
+    const body = document.getElementById('notifBody').value.trim();
+    const target = document.getElementById('notifTarget').value;
+    if (!title || !body) return alert('Please fill title and message.');
+
+    let sentTo = [];
+    if (target === 'all') {
+      sentTo = allUsersCache.filter(u => u.role === 'client').map(u => u.uid);
+    } else {
+      sentTo = [target];
+    }
+
+    try {
+      await db.collection('notifications').add({
+        title,
+        body,
+        sentTo,
+        createdBy: currentUser.uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        readBy: []
+      });
+      alert('Notification sent.');
+      renderAdminTab('notifications');
+    } catch (error) {
+      alert('Failed to send: ' + error.message);
+    }
+  });
 }
 
 // ===================== ADMIN MESSAGES =====================
