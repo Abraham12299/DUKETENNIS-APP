@@ -33,9 +33,9 @@ let selectedBookingDate = null;
 let undoStack = [];
 
 // Live scoreboard state
-let liveRoomCode = null;
+let liveMatchId = null;
 let liveMatchListener = null;
-let liveRole = null; // 'admin' or 'viewer'
+let liveRole = null;
 let liveMatchData = null;
 
 // ===================== UTILITY FUNCTIONS =====================
@@ -165,8 +165,7 @@ async function ensureUserProfile(user) {
       role: isAdmin ? 'admin' : 'client', skillCategory: 'Beginner', weeklySessions: 1,
       points: 0, matchesWon: 0, matchesLost: 0, username: '', gender: '',
       profilePic: '', coverPic: '', alertsEnabled: true, paidThroughMonth: '',
-      phone: '', secondPhone: '', emergencyContact: '',
-      lastActive: firebase.firestore.FieldValue.serverTimestamp(),
+      phone: '', lastActive: firebase.firestore.FieldValue.serverTimestamp(),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
     await userRef.set(newProfile);
@@ -729,7 +728,6 @@ async function renderRankings(container) {
       <div style="margin-bottom:8px;">
         <input type="text" id="h2hSearchInput" placeholder="Search player..." oninput="searchH2H(this.value)">
       </div>
-      <div id="h2hSearchResults"></div>
       <table>
         <tr><th>Opponent</th><th>Record</th></tr>
         ${allPlayers.filter(p => p.uid !== userProfile.uid).map(p => {
@@ -934,6 +932,12 @@ async function renderProfile(container) {
     const profilePicUrl = profile.profilePic || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="%23ccc"/><text x="50" y="50" font-size="40" text-anchor="middle" dominant-baseline="central">👤</text></svg>';
     const coverUrl = profile.coverPic || '';
 
+    let contacts = {};
+    try {
+      const contactsDoc = await db.collection('userContacts').doc(userProfile.uid).get();
+      if (contactsDoc.exists) contacts = contactsDoc.data();
+    } catch (e) {}
+
     container.innerHTML = `
       <div class="card" style="padding:0;overflow:hidden;">
         <div class="profile-cover">
@@ -960,9 +964,9 @@ async function renderProfile(container) {
             <label>Phone (Primary)</label>
             <input type="tel" id="editPhone" value="${escapeHtml(profile.phone || '')}" placeholder="Enter primary phone">
             <label>Second Phone</label>
-            <input type="tel" id="editSecondPhone" value="${escapeHtml(profile.secondPhone || '')}" placeholder="Enter second phone">
+            <input type="tel" id="editSecondPhone" value="${escapeHtml(contacts.secondPhone || '')}" placeholder="Enter second phone">
             <label>Emergency Contact</label>
-            <input type="text" id="editEmergencyContact" value="${escapeHtml(profile.emergencyContact || '')}" placeholder="Enter emergency contact">
+            <input type="text" id="editEmergencyContact" value="${escapeHtml(contacts.emergencyContact || '')}" placeholder="Enter emergency contact">
             <button class="btn-primary" onclick="saveContactInfo()">Save Contact Info</button>
           </div>
         </div>
@@ -978,15 +982,17 @@ window.saveContactInfo = async function() {
   const secondPhone = document.getElementById('editSecondPhone').value.trim();
   const emergencyContact = document.getElementById('editEmergencyContact').value.trim();
   try {
-    const old = { phone: userProfile.phone, secondPhone: userProfile.secondPhone, emergencyContact: userProfile.emergencyContact };
-    await db.collection('users').doc(userProfile.uid).update({
-      phone, secondPhone, emergencyContact
-    });
+    const contactsRef = db.collection('userContacts').doc(userProfile.uid);
+    const oldDoc = await contactsRef.get();
+    const old = oldDoc.exists ? oldDoc.data() : {};
+    await contactsRef.set({ secondPhone, emergencyContact }, { merge: true });
+    await db.collection('users').doc(userProfile.uid).update({ phone });
     userProfile.phone = phone;
     userProfile.secondPhone = secondPhone;
     userProfile.emergencyContact = emergencyContact;
     showUndoButton(async () => {
-      await db.collection('users').doc(userProfile.uid).update(old);
+      await contactsRef.set(old, { merge: true });
+      await db.collection('users').doc(userProfile.uid).update({ phone: old.phone || '' });
       userProfile = { ...userProfile, ...old };
       alert('Contact info reverted.');
       renderProfile(document.getElementById('messagingContent'));
@@ -1267,281 +1273,761 @@ async function renderAdminTab(tab) {
   }
 }
 
-// ===================== LIVE SCOREBOARD (ADMIN) =====================
-async function renderAdminLiveScoreboard(container) {
-  container.innerHTML = `
-    <div class="card live-admin-card">
-      <h3>Create Live Match</h3>
-      <button class="btn-primary" onclick="generateRoomCode()">Generate New Room</button>
-      <div id="liveRoomDisplay" style="margin:10px 0;">
-        ${liveRoomCode ? `<span class="live-room-code">${liveRoomCode}</span> <button class="btn-outline" onclick="copyRoomCode()">Copy</button>` : 'No room generated yet.'}
-      </div>
-      <hr style="margin:12px 0;">
-      <label>Match Title</label>
-      <input type="text" id="liveTitle" placeholder="e.g., Championship Final">
-      <label>Subtitle</label>
-      <input type="text" id="liveSubtitle" placeholder="e.g., Gentlemen's Singles">
-      <label>Mode</label>
-      <select id="liveMode" onchange="updateLiveMode()">
-        <option value="singles">Singles</option>
-        <option value="doubles">Doubles</option>
-      </select>
-      <div id="livePlayerInputs">
-        <!-- Dynamic inputs based on mode -->
-      </div>
-      <button class="btn-primary" onclick="startLiveMatch()">Start Match</button>
-    </div>
-    <div id="liveAdminControls" style="display:none;">
-      <!-- Live controls will appear here -->
-    </div>
-  `;
-
-  updateLiveMode(); // initialize player inputs
-}
-
-function generateRoomCode() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  liveRoomCode = code;
-  document.getElementById('liveRoomDisplay').innerHTML = `<span class="live-room-code">${code}</span> <button class="btn-outline" onclick="copyRoomCode()">Copy</button>`;
-  // Save to history
-  const history = JSON.parse(localStorage.getItem('roomHistory') || '[]');
-  history.unshift(code);
-  localStorage.setItem('roomHistory', JSON.stringify(history.slice(0,20)));
-}
-
-function copyRoomCode() {
-  copyToClipboard(liveRoomCode);
-}
-
-function updateLiveMode() {
-  const mode = document.getElementById('liveMode').value;
-  const container = document.getElementById('livePlayerInputs');
-  if (mode === 'singles') {
-    container.innerHTML = `
-      <label>Team 1 Player</label><input type="text" id="liveT1P1" placeholder="Player name">
-      <label>Team 2 Player</label><input type="text" id="liveT2P1" placeholder="Player name">
-    `;
-  } else {
-    container.innerHTML = `
-      <label>Team 1 Player 1</label><input type="text" id="liveT1P1" placeholder="Player name">
-      <label>Team 1 Player 2</label><input type="text" id="liveT1P2" placeholder="Partner name">
-      <label>Team 2 Player 1</label><input type="text" id="liveT2P1" placeholder="Player name">
-      <label>Team 2 Player 2</label><input type="text" id="liveT2P2" placeholder="Partner name">
-    `;
-  }
-}
-
-async function startLiveMatch() {
-  if (!liveRoomCode) {
-    alert('Generate a room code first.');
-    return;
-  }
-  const title = document.getElementById('liveTitle').value.trim() || 'Live Match';
-  const subtitle = document.getElementById('liveSubtitle').value.trim() || '';
-  const mode = document.getElementById('liveMode').value;
-  const t1p1 = document.getElementById('liveT1P1').value.trim() || 'Team 1';
-  const t2p1 = document.getElementById('liveT2P1').value.trim() || 'Team 2';
-  let t1p2 = '', t2p2 = '';
-  if (mode === 'doubles') {
-    t1p2 = document.getElementById('liveT1P2').value.trim() || 'Partner';
-    t2p2 = document.getElementById('liveT2P2').value.trim() || 'Partner';
-  }
-  const initialState = {
-    title,
-    subtitle,
-    mode,
-    team1: { name: t1p1, partner: t1p2, points: 0, games: 0, sets: 0 },
-    team2: { name: t2p1, partner: t2p2, points: 0, games: 0, sets: 0 },
-    serving: 'team1',
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
-  try {
-    await db.collection('liveMatches').doc(liveRoomCode).set(initialState);
-    // Subscribe to changes
-    if (liveMatchListener) liveMatchListener();
-    liveMatchListener = db.collection('liveMatches').doc(liveRoomCode)
-      .onSnapshot((doc) => {
-        if (doc.exists) {
-          liveMatchData = doc.data();
-          renderLiveAdminControls(document.getElementById('liveAdminControls'));
-        }
-      });
-    document.getElementById('liveAdminControls').style.display = 'block';
-    document.querySelector('.live-admin-card').style.display = 'none';
-  } catch (error) {
-    alert('Failed to start match: ' + error.message);
-  }
-}
-
-function renderLiveAdminControls(container) {
-  if (!liveMatchData) return;
-  const d = liveMatchData;
-  const pointsLabel = (points) => {
-    const tennisPoints = ['Love', '15', '30', '40'];
-    if (points < 4) return tennisPoints[points];
-    if (d.team1.points === d.team2.points) return 'Deuce';
-    return d.team1.points > d.team2.points ? 'AD' : '40';
-  };
+// ===================== ADMIN BOOKINGS =====================
+async function renderAdminBookings(container) {
+  container.innerHTML = '<p>Loading...</p>';
+  const snap = await db.collection('bookings').get();
+  const bookings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  bookings.sort((a,b) => b.date.localeCompare(a.date));
   container.innerHTML = `
     <div class="card">
-      <h3>Live Controls - ${escapeHtml(d.title)}</h3>
-      <div style="display:flex;gap:12px;justify-content:space-around;">
-        <div>
-          <h4>${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</h4>
-          <p>Points: ${pointsLabel(d.team1.points)}</p>
-          <p>Games: ${d.team1.games}</p>
-          <p>Sets: ${d.team1.sets}</p>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'points', 1)">+ Point</button>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'games', 1)">+ Game</button>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'sets', 1)">+ Set</button>
+      <h3>All Bookings</h3>
+      <button class="btn-outline" onclick="exportBookingsCSV()">Download CSV</button>
+      ${bookings.length === 0 ? '<p>No bookings.</p>' : bookings.map(b => `
+        <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100);">
+          <div><strong>${escapeHtml(b.clientName)}</strong> · ${escapeHtml(b.programType)} ${b.groupSession?'<span class="badge badge-blue">Group</span>':''} ${b.manualEntry?'<span class="badge badge-yellow">Manual</span>':''} <div>${formatDate(b.date)}</div></div>
+          <div><span class="badge ${b.status==='booked'?'badge-green':b.status==='attended'?'badge-blue':'badge-red'}">${b.status}</span> ${b.status==='booked'?`<button class="btn-outline" onclick="markAttended('${b.id}')">Attended</button>`:''}</div>
         </div>
-        <div>
-          <h4>${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</h4>
-          <p>Points: ${pointsLabel(d.team2.points)}</p>
-          <p>Games: ${d.team2.games}</p>
-          <p>Sets: ${d.team2.sets}</p>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'points', 1)">+ Point</button>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'games', 1)">+ Game</button>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'sets', 1)">+ Set</button>
-        </div>
-      </div>
-      <div style="margin-top:12px;">
-        <label>Serving</label>
-        <select onchange="updateServing(this.value)">
-          <option value="team1" ${d.serving === 'team1' ? 'selected' : ''}>${escapeHtml(d.team1.name)}</option>
-          <option value="team2" ${d.serving === 'team2' ? 'selected' : ''}>${escapeHtml(d.team2.name)}</option>
-        </select>
-        <button class="btn-danger" onclick="endLiveMatch()">End Match</button>
-      </div>
+      `).join('')}
     </div>
   `;
 }
 
-window.updateLiveScore = async function(team, field, delta) {
-  if (!liveMatchData) return;
-  const updateObj = {};
-  updateObj[`${team}.${field}`] = firebase.firestore.FieldValue.increment(delta);
-  await db.collection('liveMatches').doc(liveRoomCode).update(updateObj);
+window.markAttended = async function(bookingId) {
+  await db.collection('bookings').doc(bookingId).update({ status:'attended', updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  showUndoButton(async () => {
+    await db.collection('bookings').doc(bookingId).update({ status: 'booked' });
+    alert('Mark undone.');
+    renderAdminTab('bookings');
+  });
+  alert('Marked attended.');
+  renderAdminTab('bookings');
 };
 
-window.updateServing = async function(value) {
-  await db.collection('liveMatches').doc(liveRoomCode).update({ serving: value });
+window.exportBookingsCSV = async function() {
+  const snap = await db.collection('bookings').get();
+  const bookings = snap.docs.map(d => d.data());
+  const rows = [['Client', 'Program', 'Date', 'Status', 'Group', 'Manual']];
+  bookings.forEach(b => rows.push([b.clientName, b.programType, b.date, b.status, b.groupSession ? 'Yes' : 'No', b.manualEntry ? 'Yes' : 'No']));
+  exportToCSV('bookings.csv', rows);
 };
 
-window.endLiveMatch = async function() {
-  if (confirm('End match and delete room?')) {
-    await db.collection('liveMatches').doc(liveRoomCode).delete();
-    if (liveMatchListener) liveMatchListener();
-    liveMatchListener = null;
-    liveMatchData = null;
-    liveRoomCode = null;
-    renderAdminTab('live');
-  }
-};
+// ===================== ADMIN ATTENDANCE =====================
+async function renderAdminAttendance(container) {
+  container.innerHTML = '<p>Loading...</p>';
+  const month = currentAttendanceMonth;
+  const clientsSnap = await db.collection('users').where('role', '==', 'client').get();
+  const clients = clientsSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  const attSnap = await db.collection('attendance').where('month', '==', month).get();
+  const attendanceMap = {};
+  attSnap.docs.forEach(d => attendanceMap[d.data().userId] = { id: d.id, sessions: d.data().sessions || [] });
 
-// ===================== LIVE SCOREBOARD (VIEWER / CLIENT) =====================
-async function renderLiveScreen(container) {
-  container.innerHTML = `
-    <div class="card">
-      <h3>Join Live Match</h3>
-      <p>Enter the 6-character room code provided by the coach.</p>
-      <input type="text" id="joinRoomCode" maxlength="6" placeholder="e.g., ABC123" style="text-transform:uppercase;">
-      <button class="btn-primary" onclick="joinLiveRoom()">Join</button>
-    </div>
-    <div id="viewerScoreboard"></div>
-  `;
-}
-
-window.joinLiveRoom = function() {
-  const code = document.getElementById('joinRoomCode').value.trim().toUpperCase();
-  if (code.length !== 6) {
-    alert('Please enter a 6-character code.');
-    return;
-  }
-  // Check if room exists
-  db.collection('liveMatches').doc(code).get().then((doc) => {
-    if (doc.exists) {
-      liveRoomCode = code;
-      liveRole = 'viewer';
-      if (liveMatchListener) liveMatchListener();
-      liveMatchListener = db.collection('liveMatches').doc(code)
-        .onSnapshot((snap) => {
-          if (snap.exists) {
-            liveMatchData = snap.data();
-            renderViewerScoreboard(document.getElementById('viewerScoreboard'));
-          } else {
-            // Room deleted
-            document.getElementById('viewerScoreboard').innerHTML = '<p>Match ended.</p>';
-            if (liveMatchListener) liveMatchListener();
-            liveMatchListener = null;
-            liveRoomCode = null;
-            liveMatchData = null;
-          }
-        });
-    } else {
-      alert('Room not found.');
+  const maxSessions = Math.max(...clients.map(c => (c.weeklySessions || 1) * 4), 4);
+  let tableHtml = `<table><tr><th>Client</th>${Array.from({length:maxSessions}, (_,i)=>`<th>S${i+1}</th>`).join('')}</tr>`;
+  clients.forEach(client => {
+    const totalSlots = (client.weeklySessions || 1) * 4;
+    const record = attendanceMap[client.uid] || { sessions: Array(totalSlots).fill('none') };
+    while (record.sessions.length < totalSlots) record.sessions.push('none');
+    if (record.sessions.length > totalSlots) record.sessions = record.sessions.slice(0, totalSlots);
+    
+    tableHtml += `<tr><td>${escapeHtml(client.username || client.name)}</td>`;
+    for (let i = 0; i < maxSessions; i++) {
+      if (i < totalSlots) {
+        const val = record.sessions[i] === 'attended' || record.sessions[i] === true ? 'attended' : (record.sessions[i] === 'booked' ? 'booked' : 'none');
+        const bgColor = val === 'attended' ? '#4CAF50' : val === 'booked' ? '#FFC107' : '#E0E0E0';
+        const label = val === 'attended' ? '✓' : val === 'booked' ? 'B' : '-';
+        tableHtml += `<td class="attendance-cell" style="text-align:center;">
+          <button class="attendance-btn" style="background:${bgColor};color:white;border:none;border-radius:50%;width:30px;height:30px;cursor:pointer;" data-user="${client.uid}" data-month="${month}" data-index="${i}" data-val="${val}">${label}</button>
+        </td>`;
+      } else {
+        tableHtml += `<td></td>`;
+      }
     }
-  }).catch((error) => {
-    alert('Error joining room: ' + error.message);
+    tableHtml += `</tr>`;
+  });
+  tableHtml += `</table>`;
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>Attendance for ${month}</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+        <button class="btn-outline" onclick="changeMonth(-1)">◀ Prev</button>
+        <input type="month" id="monthPicker" value="${month}" onchange="setMonthFromPicker(this.value)">
+        <button class="btn-outline" onclick="changeMonth(1)">Next ▶</button>
+        <button class="btn-outline" onclick="manualAttendance()">Add Manual Attendance</button>
+        <button class="btn-outline" onclick="copyClientAttendance()">Copy Client Attendance</button>
+        <button class="btn-outline" onclick="copyAllAttendance()">Copy All Attendance</button>
+        <button class="btn-outline" onclick="exportAttendanceCSV()">Download CSV</button>
+      </div>
+      ${tableHtml}
+      <p style="font-size:0.8rem;color:var(--gray-400);">Click a circle to toggle: Green = Attended, Yellow = Booked, Gray = None.</p>
+    </div>
+  `;
+
+  document.querySelectorAll('.attendance-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const userId = btn.dataset.user;
+      const month = btn.dataset.month;
+      const index = parseInt(btn.dataset.index);
+      const currentVal = btn.dataset.val;
+      const cycle = { 'none': 'booked', 'booked': 'attended', 'attended': 'none' };
+      const nextVal = cycle[currentVal];
+      await updateAttendance(userId, month, index, nextVal);
+      showUndoButton(async () => {
+        await updateAttendance(userId, month, index, currentVal);
+        renderAdminTab('attendance');
+      });
+      renderAdminTab('attendance');
+    });
+  });
+}
+
+async function updateAttendance(userId, month, index, value) {
+  const docId = `${userId}_${month}`;
+  const attRef = db.collection('attendance').doc(docId);
+  const doc = await attRef.get();
+  if (doc.exists) {
+    const sessions = doc.data().sessions || [];
+    while (sessions.length <= index) sessions.push('none');
+    sessions[index] = value;
+    await attRef.update({ sessions });
+  } else {
+    const userDoc = await db.collection('users').doc(userId).get();
+    const weeklySessions = userDoc.data().weeklySessions || 1;
+    const totalSlots = weeklySessions * 4;
+    const sessions = Array(totalSlots).fill('none');
+    sessions[index] = value;
+    await attRef.set({ userId, month, sessions });
+  }
+}
+
+window.changeMonth = function(delta) {
+  const [year, month] = currentAttendanceMonth.split('-').map(Number);
+  const d = new Date(year, month - 1 + delta, 1);
+  currentAttendanceMonth = d.toISOString().slice(0,7);
+  renderAdminTab('attendance');
+};
+
+window.setMonthFromPicker = function(value) {
+  if (value) {
+    currentAttendanceMonth = value;
+    renderAdminTab('attendance');
+  }
+};
+
+window.manualAttendance = function() {
+  const container = document.getElementById('adminContent');
+  db.collection('users').get().then(snap => {
+    allUsersCache = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    container.innerHTML = `
+      <div class="card">
+        <h3>Manual Attendance</h3>
+        <form id="manualAttendanceForm">
+          <label>Client</label>
+          <select id="manualClientSelect" required><option>Select client...</option>${allUsersCache.filter(u=>u.role==='client').map(u=>`<option value="${u.uid}">${escapeHtml(u.username||u.name)}</option>`).join('')}</select>
+          <label>Date</label><input type="date" id="manualDate" required />
+          <label>Program</label><select id="manualProgram"><option>Private Lesson</option><option>Group Lesson</option><option>Kids Training</option><option>Cardio Tennis</option></select>
+          <button type="submit" class="btn-primary">Mark Attendance</button>
+        </form>
+      </div>
+    `;
+    document.getElementById('manualAttendanceForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const userId = document.getElementById('manualClientSelect').value;
+      const date = document.getElementById('manualDate').value;
+      const program = document.getElementById('manualProgram').value;
+      if (!userId || !date) return alert('Please fill all fields.');
+      const user = allUsersCache.find(u => u.uid === userId);
+      const bookingRef = await db.collection('bookings').add({
+        userId, clientName: user.username || user.name, programType: program, date,
+        groupSession: program === 'Group Lesson', status: 'attended', manualEntry: true,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showUndoButton(async () => {
+        await bookingRef.delete();
+        alert('Manual attendance undone.');
+        renderAdminTab('attendance');
+      });
+      alert('Manual attendance recorded.');
+      renderAdminTab('attendance');
+    });
   });
 };
 
-function renderViewerScoreboard(container) {
-  if (!liveMatchData) return;
-  const d = liveMatchData;
-  const pointsLabel = (points) => {
-    const tennisPoints = ['Love', '15', '30', '40'];
-    if (points < 4) return tennisPoints[points];
-    if (d.team1.points === d.team2.points) return 'Deuce';
-    return d.team1.points > d.team2.points ? 'AD' : '40';
-  };
+window.copyClientAttendance = function() {
+  const month = currentAttendanceMonth;
+  db.collection('users').where('role', '==', 'client').get().then(snap => {
+    const clients = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const select = document.createElement('select');
+    select.innerHTML = '<option value="">Select client</option>' + clients.map(c => `<option value="${c.uid}">${escapeHtml(c.username || c.name)}</option>`).join('');
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:300;';
+    modal.innerHTML = `<div class="card" style="max-width:400px;width:100%;"><h3>Copy Client Attendance</h3>${select.outerHTML}<button class="btn-primary" id="confirmCopyClient">Copy</button></div>`;
+    document.body.appendChild(modal);
+    document.getElementById('confirmCopyClient').addEventListener('click', async () => {
+      const clientId = modal.querySelector('select').value;
+      if (!clientId) return alert('Select a client');
+      const attRef = db.collection('attendance').doc(`${clientId}_${month}`);
+      const doc = await attRef.get();
+      let sessions = [];
+      if (doc.exists) sessions = doc.data().sessions || [];
+      const client = clients.find(c => c.uid === clientId);
+      const text = `Attendance for ${client.username || client.name} (${month}):\n` +
+        sessions.map((s, i) => `Session ${i+1}: ${s}`).join('\n');
+      navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
+      modal.remove();
+    });
+  });
+};
+
+window.copyAllAttendance = async function() {
+  const month = currentAttendanceMonth;
+  const clientsSnap = await db.collection('users').where('role', '==', 'client').get();
+  const clients = clientsSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  const attSnap = await db.collection('attendance').where('month', '==', month).get();
+  const attendanceMap = {};
+  attSnap.docs.forEach(d => attendanceMap[d.data().userId] = d.data().sessions || []);
+  const lines = [`Attendance for ${month}:`];
+  clients.forEach(c => {
+    const sessions = attendanceMap[c.uid] || [];
+    const str = `${c.username || c.name}: ` + sessions.map(s => s === 'attended' ? 'A' : s === 'booked' ? 'B' : '-').join(', ');
+    lines.push(str);
+  });
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text).then(() => alert('All attendance copied!'));
+};
+
+window.exportAttendanceCSV = async function() {
+  const month = currentAttendanceMonth;
+  const clientsSnap = await db.collection('users').where('role', '==', 'client').get();
+  const clients = clientsSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  const attSnap = await db.collection('attendance').where('month', '==', month).get();
+  const attendanceMap = {};
+  attSnap.docs.forEach(d => attendanceMap[d.data().userId] = d.data().sessions || []);
+
+  const rows = [['Client', ...Array.from({length: Math.max(...clients.map(c => (c.weeklySessions||1)*4), 4)}, (_,i) => `S${i+1}`)]];
+  clients.forEach(c => {
+    const sessions = attendanceMap[c.uid] || [];
+    rows.push([c.username || c.name, ...sessions]);
+  });
+  exportToCSV(`attendance_${month}.csv`, rows);
+};
+
+// ===================== ADMIN ANNOUNCEMENTS =====================
+async function renderAdminAnnouncements(container) {
   container.innerHTML = `
-    <div class="live-scoreboard">
-      <div style="text-align:center;margin-bottom:15px;">
-        <h2>${escapeHtml(d.title)}</h2>
-        ${d.subtitle ? `<p>${escapeHtml(d.subtitle)}</p>` : ''}
-      </div>
-      <div class="team">
-        <div>
-          <div class="team-name">${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</div>
-          ${d.serving === 'team1' ? '<span class="serving-badge">SERVING</span>' : ''}
-        </div>
-        <div class="team-score">${pointsLabel(d.team1.points)}</div>
-      </div>
-      <div class="team">
-        <div>
-          <div class="team-name">${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</div>
-          ${d.serving === 'team2' ? '<span class="serving-badge">SERVING</span>' : ''}
-        </div>
-        <div class="team-score">${pointsLabel(d.team2.points)}</div>
-      </div>
-      <div style="display:flex;justify-content:space-between;margin-top:20px;">
-        <div>
-          Games: ${d.team1.games}
-          <br>Sets: ${d.team1.sets}
-        </div>
-        <div>
-          Games: ${d.team2.games}
-          <br>Sets: ${d.team2.sets}
-        </div>
-      </div>
+    <div class="card">
+      <h3>Post Announcement</h3>
+      <form id="announcementForm"><label>Title</label><input id="annTitle"><label>Message</label><textarea id="annBody" rows="4"></textarea><button class="btn-primary">Post</button></form>
     </div>
-    <button class="btn-danger" onclick="leaveLiveRoom()">Leave Room</button>
+    <div id="announcementList"></div>
   `;
-  // Vibration on set win (if supported)
-  if (navigator.vibrate) navigator.vibrate(200);
+  document.getElementById('announcementForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const title = document.getElementById('annTitle').value.trim();
+    const body = document.getElementById('annBody').value.trim();
+    if (!title || !body) return;
+    const annRef = await db.collection('announcements').add({ coachId: currentUser.uid, title, body, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    showUndoButton(async () => {
+      await annRef.delete();
+      alert('Announcement undone.');
+    });
+    alert('Posted!');
+    renderAdminTab('announcements');
+  });
+  const annSnap = await db.collection('announcements').orderBy('createdAt','desc').get();
+  const anns = annSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  document.getElementById('announcementList').innerHTML = anns.length === 0 ? '<p>No announcements.</p>' : anns.map(a => `<div class="card"><h4>${escapeHtml(a.title)}</h4><p>${escapeHtml(a.body)}</p><small>${new Date(a.createdAt?.toDate()).toLocaleString()}</small><button class="btn-danger" onclick="deleteAnnouncement('${a.id}')">Delete</button></div>`).join('');
+}
+window.deleteAnnouncement = async function(id) { if (confirm('Delete?')) { await db.collection('announcements').doc(id).delete(); renderAdminTab('announcements'); } };
+
+// ===================== ADMIN USERS =====================
+async function renderAdminUsers(container) {
+  container.innerHTML = '<p>Loading...</p>';
+  const usersSnap = await db.collection('users').get();
+  const users = await Promise.all(usersSnap.docs.map(async (d) => {
+    const userData = d.data();
+    const contactsDoc = await db.collection('userContacts').doc(d.id).get();
+    const contacts = contactsDoc.exists ? contactsDoc.data() : {};
+    return { uid: d.id, ...userData, secondPhone: contacts.secondPhone || '', emergencyContact: contacts.emergencyContact || '' };
+  }));
+  container.innerHTML = `
+    <div class="card">
+      <h3>Add New User</h3>
+      <form id="addUserForm">
+        <label>Name</label><input id="newUserName" required>
+        <label>Email</label><input type="email" id="newUserEmail" required>
+        <label>Password</label><input type="password" id="newUserPassword" required minlength="6">
+        <label>Role</label><select id="newUserRole"><option value="client">Client</option><option value="admin">Admin</option></select>
+        <label>Gender</label><select id="newUserGender"><option value="Male">Male</option><option value="Female">Female</option></select>
+        <button type="submit" class="btn-primary">Create User</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>All Users</h3>
+      <table>
+        <tr><th>Username</th><th>Name</th><th>Role</th><th>Gender</th><th>Weekly Sessions</th><th>Phone</th><th>Second Phone</th><th>Emergency Contact</th><th>Action</th></tr>
+        ${users.map(u => `<tr>
+          <td>${escapeHtml(u.username||'Not set')}</td>
+          <td>${escapeHtml(u.name)}</td>
+          <td><select onchange="updateUserRole('${u.uid}', this.value)"><option value="client" ${u.role==='client'?'selected':''}>Client</option><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option></select></td>
+          <td><select onchange="updateUserGender('${u.uid}', this.value)"><option value="Male" ${u.gender==='Male'?'selected':''}>Male</option><option value="Female" ${u.gender==='Female'?'selected':''}>Female</option></select></td>
+          <td><select onchange="updateWeeklySessions('${u.uid}', parseInt(this.value))"><option value="1" ${(u.weeklySessions||1)===1?'selected':''}>1x</option><option value="2" ${(u.weeklySessions||1)===2?'selected':''}>2x</option><option value="3" ${(u.weeklySessions||1)===3?'selected':''}>3x</option></select></td>
+          <td>${escapeHtml(u.phone || '')}</td>
+          <td>${escapeHtml(u.secondPhone || '')}</td>
+          <td>${escapeHtml(u.emergencyContact || '')}</td>
+          <td><button class="btn-danger" onclick="removeUser('${u.uid}')">Remove</button></td>
+        </tr>`).join('')}
+      </table>
+    </div>
+  `;
+
+  document.getElementById('addUserForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('newUserName').value.trim();
+    const email = document.getElementById('newUserEmail').value.trim();
+    const password = document.getElementById('newUserPassword').value;
+    const role = document.getElementById('newUserRole').value;
+    const gender = document.getElementById('newUserGender').value;
+    if (!name || !email || !password) return alert('Please fill all fields.');
+    if (password.length < 6) return alert('Password must be at least 6 characters.');
+    try {
+      const userCredential = await auth.createUserWithEmailAndPassword(email, password);
+      await userCredential.user.updateProfile({ displayName: name });
+      await db.collection('users').doc(userCredential.user.uid).set({
+        uid: userCredential.user.uid, email, name, role, gender,
+        weeklySessions: 1, points: 0, matchesWon: 0, matchesLost: 0,
+        username: '', profilePic: '', coverPic: '',
+        phone: '', lastActive: firebase.firestore.FieldValue.serverTimestamp(),
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      showUndoButton(async () => {
+        await auth.currentUser.delete().catch(()=>{});
+        await db.collection('users').doc(userCredential.user.uid).delete();
+        alert('User creation undone.');
+        renderAdminTab('users');
+      });
+      alert('User created successfully.');
+      renderAdminTab('users');
+    } catch (error) { alert('Failed to create user: ' + error.message); }
+  });
 }
 
-window.leaveLiveRoom = function() {
-  if (liveMatchListener) liveMatchListener();
-  liveMatchListener = null;
-  liveRoomCode = null;
-  liveMatchData = null;
-  renderLiveScreen(document.getElementById('mainContent'));
+window.updateUserRole = async function(uid, role) {
+  const oldRole = userProfile.role;
+  await db.collection('users').doc(uid).update({ role });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ role: oldRole });
+    alert('Role change undone.');
+    renderAdminTab('users');
+  });
+  alert('Role updated');
+  renderAdminTab('users');
+};
+window.updateUserGender = async function(uid, gender) {
+  const oldGender = userProfile.gender;
+  await db.collection('users').doc(uid).update({ gender });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ gender: oldGender });
+    alert('Gender change undone.');
+    renderAdminTab('users');
+  });
+  alert('Gender updated');
+  renderAdminTab('users');
+};
+window.updateWeeklySessions = async function(uid, sessions) {
+  if (!confirm('Changing weekly sessions will adjust the number of attendance slots for this client. Continue?')) return;
+  const oldSessions = userProfile.weeklySessions;
+  await db.collection('users').doc(uid).update({ weeklySessions: sessions });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ weeklySessions: oldSessions });
+    alert('Weekly sessions change undone.');
+    renderAdminTab('users');
+  });
+  alert('Weekly sessions updated.');
+  renderAdminTab('users');
+};
+window.removeUser = async function(uid) {
+  if (!confirm('Are you sure you want to remove this user? This will delete their account and all associated data.')) return;
+  try {
+    await db.collection('users').doc(uid).delete();
+    const bookingsSnap = await db.collection('bookings').where('userId', '==', uid).get();
+    const batch = db.batch();
+    bookingsSnap.docs.forEach(doc => batch.delete(doc.ref));
+    const attSnap = await db.collection('attendance').where('userId', '==', uid).get();
+    attSnap.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    alert('User removed.');
+    renderAdminTab('users');
+  } catch (error) { alert('Failed to remove user: ' + error.message); }
+};
+
+// ===================== ADMIN RANKINGS =====================
+async function renderAdminRankings(container) {
+  const playersSnap = await db.collection('users').where('role', '==', 'client').get();
+  const players = playersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  container.innerHTML = `
+    <div class="card">
+      <h3>Adjust Player Points</h3>
+      <form id="adjustPointsForm">
+        <label>Player</label>
+        <select id="adjustPlayerSelect" required><option value="">Select player</option>${players.map(p=>`<option value="${p.uid}">${escapeHtml(p.username||p.name)} (${p.points} pts)</option>`).join('')}</select>
+        <label>Points to add (use negative to reduce)</label>
+        <input type="number" id="pointsDelta" required value="0" />
+        <button type="submit" class="btn-primary">Apply Adjustment</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Record Match Result</h3>
+      <form id="matchForm">
+        <label>Winner</label><select id="winnerSelect"><option>Select winner</option>${players.map(p=>`<option value="${p.uid}">${escapeHtml(p.username||p.name)} (${p.points})</option>`).join('')}</select>
+        <label>Loser</label><select id="loserSelect"><option>Select loser</option>${players.map(p=>`<option value="${p.uid}">${escapeHtml(p.username||p.name)} (${p.points})</option>`).join('')}</select>
+        <button class="btn-primary">Submit Match</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Current Rankings</h3>
+      <table><tr><th>#</th><th>Player</th><th>Points</th><th>W/L</th></tr>${players.map(p=>({...p,effectivePoints:getDecayedPoints(p.points,p.lastActive)})).sort((a,b)=>b.effectivePoints-a.effectivePoints).map((p,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(p.username||p.name)}</td><td>${p.effectivePoints}</td><td>${p.matchesWon}-${p.matchesLost}</td></tr>`).join('')}</table>
+    </div>
+  `;
+
+  document.getElementById('adjustPointsForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const uid = document.getElementById('adjustPlayerSelect').value;
+    const delta = parseInt(document.getElementById('pointsDelta').value);
+    if (!uid || isNaN(delta)) return alert('Select player and enter a number.');
+    const oldPoints = players.find(p=>p.uid===uid)?.points || 0;
+    await db.collection('users').doc(uid).update({ points: firebase.firestore.FieldValue.increment(delta) });
+    showUndoButton(async () => {
+      await db.collection('users').doc(uid).update({ points: oldPoints });
+      alert('Points change undone.');
+      renderAdminTab('rankings');
+    });
+    alert('Points updated.');
+    renderAdminTab('rankings');
+  });
+
+  document.getElementById('matchForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const winnerUid = document.getElementById('winnerSelect').value;
+    const loserUid = document.getElementById('loserSelect').value;
+    if (!winnerUid || !loserUid || winnerUid===loserUid) return alert('Select two different players.');
+    const winner = players.find(p=>p.uid===winnerUid);
+    const loser = players.find(p=>p.uid===loserUid);
+    let points = 50;
+    if (winner.points < loser.points) points += 25;
+    const oldWinnerPoints = winner.points, oldLoserPoints = loser.points;
+    const oldWinnerW = winner.matchesWon, oldLoserL = loser.matchesLost;
+    await db.collection('users').doc(winnerUid).update({ points: firebase.firestore.FieldValue.increment(points), matchesWon: firebase.firestore.FieldValue.increment(1), lastActive: firebase.firestore.FieldValue.serverTimestamp() });
+    await db.collection('users').doc(loserUid).update({ matchesLost: firebase.firestore.FieldValue.increment(1), lastActive: firebase.firestore.FieldValue.serverTimestamp() });
+    const matchRef = await db.collection('matches').add({ winnerId: winnerUid, loserId: loserUid, date: new Date().toISOString().split('T')[0], createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    showUndoButton(async () => {
+      await db.collection('users').doc(winnerUid).update({ points: oldWinnerPoints, matchesWon: oldWinnerW });
+      await db.collection('users').doc(loserUid).update({ matchesLost: oldLoserL });
+      await matchRef.delete();
+      alert('Match undone.');
+      renderAdminTab('rankings');
+    });
+    alert(`Match recorded. Winner gained ${points} points.`);
+    renderAdminTab('rankings');
+  });
+}
+
+// ===================== ADMIN REVIEWS =====================
+async function renderAdminReviews(container) {
+  container.innerHTML = '<p>Loading reviews...</p>';
+  try {
+    const reviewsSnap = await db.collection('reviews').orderBy('createdAt', 'desc').get();
+    const reviews = reviewsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const usersSnap = await db.collection('users').get();
+    const userMap = {};
+    usersSnap.docs.forEach(d => userMap[d.id] = d.data());
+
+    const grouped = {};
+    reviews.forEach(r => {
+      const date = r.createdAt?.toDate ? r.createdAt.toDate() : new Date();
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+      if (!grouped[monthKey]) grouped[monthKey] = [];
+      grouped[monthKey].push(r);
+    });
+    const sortedMonths = Object.keys(grouped).sort().reverse();
+
+    let html = `<div class="card"><h3>Client Reviews</h3>`;
+    if (sortedMonths.length === 0) {
+      html += `<p>No reviews yet.</p>`;
+    } else {
+      sortedMonths.forEach(month => {
+        const monthLabel = new Date(month + '-01').toLocaleDateString('en-GH', { month: 'long', year: 'numeric' });
+        html += `<h4 style="margin-top:12px;margin-bottom:8px;">${monthLabel}</h4>`;
+        grouped[month].forEach(r => {
+          const user = userMap[r.userId] || {};
+          const name = user.username || user.name || 'Unknown';
+          const dateStr = r.createdAt?.toDate ? r.createdAt.toDate().toLocaleString() : '';
+          html += `
+            <div class="announcement-item">
+              <h4>${escapeHtml(name)}</h4>
+              <p>Rating: ${r.rating}/5</p>
+              <p>${escapeHtml(r.comment || 'No comment')}</p>
+              <small>${dateStr}</small>
+            </div>
+          `;
+        });
+      });
+    }
+    html += `</div>`;
+    container.innerHTML = html;
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error loading reviews: ${error.message}</p></div>`;
+  }
+}
+
+// ===================== ADMIN NOTIFICATIONS =====================
+async function renderAdminNotifications(container) {
+  container.innerHTML = '<p>Loading...</p>';
+  if (allUsersCache.length === 0) {
+    const usersSnap = await db.collection('users').get();
+    allUsersCache = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  }
+  const notificationsSnap = await db.collection('notifications').orderBy('createdAt', 'desc').get();
+  const notifications = notificationsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const grouped = {};
+  notifications.forEach(n => {
+    const date = n.createdAt?.toDate ? n.createdAt.toDate() : new Date();
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+    if (!grouped[monthKey]) grouped[monthKey] = [];
+    grouped[monthKey].push(n);
+  });
+  const sortedMonths = Object.keys(grouped).sort().reverse();
+
+  container.innerHTML = `
+    <div class="card">
+      <h3>Send Notification</h3>
+      <form id="notificationForm">
+        <label>Title</label>
+        <input type="text" id="notifTitle" required />
+        <label>Message</label>
+        <textarea id="notifBody" rows="4" required></textarea>
+        <label>Send To</label>
+        <select id="notifTarget">
+          <option value="all">All Clients</option>
+          ${allUsersCache.filter(u => u.role === 'client').map(u => `<option value="${u.uid}">${escapeHtml(u.username || u.name)}</option>`).join('')}
+        </select>
+        <button type="submit" class="btn-primary">Send Notification</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Sent Notifications</h3>
+      ${sortedMonths.length === 0 ? '<p>No notifications sent.</p>' : sortedMonths.map(month => {
+        const monthLabel = new Date(month + '-01').toLocaleDateString('en-GH', { month: 'long', year: 'numeric' });
+        return `<h4 style="margin-top:12px;margin-bottom:8px;">${monthLabel}</h4>` +
+          grouped[month].map(n => `
+            <div style="border-bottom:1px solid var(--gray-100);padding:8px 0;">
+              <strong>${escapeHtml(n.title)}</strong>
+              <p>${escapeHtml(n.body)}</p>
+              <small>${new Date(n.createdAt?.toDate()).toLocaleString()}</small>
+            </div>
+          `).join('');
+      }).join('')}
+    </div>
+  `;
+
+  document.getElementById('notificationForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const title = document.getElementById('notifTitle').value.trim();
+    const body = document.getElementById('notifBody').value.trim();
+    const target = document.getElementById('notifTarget').value;
+    if (!title || !body) return alert('Please fill title and message.');
+    let sentTo = [];
+    if (target === 'all') {
+      sentTo = allUsersCache.filter(u => u.role === 'client').map(u => u.uid);
+    } else {
+      sentTo = [target];
+    }
+    try {
+      const notifRef = await db.collection('notifications').add({
+        title, body, sentTo, createdBy: currentUser.uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(), readBy: []
+      });
+      showUndoButton(async () => {
+        await notifRef.delete();
+        alert('Notification undone.');
+        renderAdminTab('notifications');
+      });
+      alert('Notification sent.');
+      renderAdminTab('notifications');
+    } catch (error) {
+      alert('Failed to send: ' + error.message);
+    }
+  });
+}
+
+// ===================== ADMIN BILLING =====================
+async function renderAdminBilling(container) {
+  container.innerHTML = '<p>Loading billing...</p>';
+  try {
+    const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+    const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const currentMonth = new Date().toISOString().slice(0,7);
+
+    let tableHtml = `<table>
+      <tr><th>Client</th><th>Plan</th><th>Monthly Fee (GHS)</th><th>Paid Through</th><th>Status</th><th>Alerts</th><th>Action</th></tr>`;
+    clients.forEach(client => {
+      const weekly = client.weeklySessions || 1;
+      const fee = getMonthlyFee(weekly);
+      const paidThrough = client.paidThroughMonth || '';
+      const isPaid = paidThrough >= currentMonth;
+      tableHtml += `<tr>
+        <td>${escapeHtml(client.username || client.name)}</td>
+        <td>${weekly}x per week</td>
+        <td>${fee}</td>
+        <td>${paidThrough || 'Not set'}</td>
+        <td><span class="badge ${isPaid ? 'badge-green' : 'badge-red'}">${isPaid ? 'Paid' : 'Unpaid'}</span></td>
+        <td><input type="checkbox" ${client.alertsEnabled ? 'checked' : ''} onchange="toggleAlertsAdmin('${client.uid}', this.checked)"></td>
+        <td>${isPaid ? '' : `<button class="btn-outline" onclick="markPaid('${client.uid}', '${currentMonth}')">Mark Paid</button>`}</td>
+      </tr>`;
+    });
+    tableHtml += `</table>`;
+
+    container.innerHTML = `
+      <div class="card">
+        <h3>Client Billing</h3>
+        ${tableHtml}
+        <button class="btn-primary" onclick="sendPaymentReminders()">Send Payment Reminders</button>
+      </div>
+    `;
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error: ${error.message}</p></div>`;
+  }
+}
+
+window.toggleAlertsAdmin = async function(uid, enabled) {
+  const oldValue = !enabled;
+  await db.collection('users').doc(uid).update({ alertsEnabled: enabled });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ alertsEnabled: oldValue });
+    alert('Alert toggle undone.');
+    renderAdminBilling(document.getElementById('adminContent'));
+  });
+  renderAdminBilling(document.getElementById('adminContent'));
+};
+
+window.markPaid = async function(uid, month) {
+  const oldPaidThrough = userProfile.paidThroughMonth || '';
+  await db.collection('users').doc(uid).update({ paidThroughMonth: month });
+  showUndoButton(async () => {
+    await db.collection('users').doc(uid).update({ paidThroughMonth: oldPaidThrough });
+    alert('Mark paid undone.');
+    renderAdminBilling(document.getElementById('adminContent'));
+  });
+  alert('Marked as paid through ' + month);
+  renderAdminBilling(document.getElementById('adminContent'));
+};
+
+window.sendPaymentReminders = async function() {
+  try {
+    const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+    const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const currentMonth = new Date().toISOString().slice(0,7);
+
+    for (const client of clients) {
+      if ((!client.paidThroughMonth || client.paidThroughMonth < currentMonth) && client.alertsEnabled) {
+        const fee = getMonthlyFee(client.weeklySessions || 1);
+        await db.collection('notifications').add({
+          title: 'Payment Reminder',
+          body: `Your monthly fee of GHS ${fee} is due. Please settle to continue booking future sessions.`,
+          sentTo: [client.uid],
+          createdBy: currentUser.uid,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          readBy: []
+        });
+      }
+    }
+    alert('Payment reminders sent.');
+  } catch (error) {
+    alert('Failed to send reminders: ' + error.message);
+  }
+};
+
+// ===================== ADMIN ANALYTICS =====================
+async function renderAdminAnalytics(container) {
+  container.innerHTML = '<p>Loading analytics...</p>';
+  try {
+    const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+    const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const bookingsSnap = await db.collection('bookings').get();
+    const bookings = bookingsSnap.docs.map(d => d.data());
+    const attendanceSnap = await db.collection('attendance').get();
+    const attendance = attendanceSnap.docs.map(d => d.data());
+
+    const currentMonth = new Date().toISOString().slice(0,7);
+    const paidClients = clients.filter(c => c.paidThroughMonth && c.paidThroughMonth >= currentMonth);
+    const revenue = paidClients.reduce((sum, c) => sum + getMonthlyFee(c.weeklySessions || 1), 0);
+
+    const totalSlots = clients.reduce((sum, c) => sum + (c.weeklySessions || 1) * 4, 0);
+    const attendedCount = attendance.reduce((sum, a) => sum + (a.sessions || []).filter(s => s === 'attended').length, 0);
+    const attendanceRate = totalSlots ? Math.round((attendedCount / totalSlots) * 100) : 0;
+
+    const programCounts = {};
+    bookings.forEach(b => {
+      const p = b.programType || 'Unknown';
+      programCounts[p] = (programCounts[p] || 0) + 1;
+    });
+    const programLabels = Object.keys(programCounts);
+    const programData = Object.values(programCounts);
+
+    container.innerHTML = `
+      <div class="card">
+        <h3>Analytics Dashboard</h3>
+        <div class="grid-2" style="margin-bottom:20px;">
+          <div class="stat-card">
+            <div class="value">GHS ${revenue}</div>
+            <div class="label">Monthly Revenue</div>
+          </div>
+          <div class="stat-card">
+            <div class="value">${attendanceRate}%</div>
+            <div class="label">Attendance Rate</div>
+          </div>
+        </div>
+        <div style="height:300px; margin-bottom:20px;">
+          <canvas id="programChart"></canvas>
+        </div>
+        <button class="btn-outline" onclick="exportAnalyticsCSV()">Download Analytics CSV</button>
+      </div>
+    `;
+
+    const ctx = document.getElementById('programChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: programLabels,
+        datasets: [{
+          label: 'Bookings by Program',
+          data: programData,
+          backgroundColor: '#CCFF00',
+          borderColor: '#B3E600',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false
+      }
+    });
+  } catch (error) {
+    container.innerHTML = `<div class="card"><p>Error loading analytics: ${error.message}</p></div>`;
+  }
+}
+
+window.exportAnalyticsCSV = async function() {
+  const usersSnap = await db.collection('users').where('role', '==', 'client').get();
+  const clients = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+  const rows = [['Username', 'Plan', 'Paid Through', 'Weekly Sessions']];
+  clients.forEach(c => {
+    rows.push([c.username || c.name, `${c.weeklySessions || 1}x`, c.paidThroughMonth || 'Not set', c.weeklySessions || 1]);
+  });
+  exportToCSV('analytics_clients.csv', rows);
 };
 
 // ===================== ADMIN MESSAGES =====================
@@ -1618,6 +2104,257 @@ window.adminOpenConversation = function(convId) {
   }
   document.getElementById('adminSendMessageBtn').addEventListener('click', sendMessage);
   messageInput.addEventListener('keypress', (e) => { if (e.key==='Enter') sendMessage(); });
+};
+
+// ===================== ADMIN LIVE SCOREBOARD =====================
+async function renderAdminLiveScoreboard(container) {
+  container.innerHTML = `
+    <div class="card live-admin-card">
+      <h3>Create Live Match</h3>
+      <p>No room code needed. The match will appear instantly for all clients.</p>
+      <label>Match Title</label>
+      <input type="text" id="liveTitle" placeholder="e.g., Championship Final">
+      <label>Subtitle</label>
+      <input type="text" id="liveSubtitle" placeholder="e.g., Gentlemen's Singles">
+      <label>Mode</label>
+      <select id="liveMode" onchange="updateLiveMode()">
+        <option value="singles">Singles</option>
+        <option value="doubles">Doubles</option>
+      </select>
+      <div id="livePlayerInputs"></div>
+      <button class="btn-primary" onclick="startLiveMatch()">Start Match</button>
+    </div>
+    <div id="liveAdminControls" style="display:none;"></div>
+  `;
+  updateLiveMode();
+}
+
+function updateLiveMode() {
+  const mode = document.getElementById('liveMode').value;
+  const container = document.getElementById('livePlayerInputs');
+  if (mode === 'singles') {
+    container.innerHTML = `
+      <label>Team 1 Player</label><input type="text" id="liveT1P1" placeholder="Player name">
+      <label>Team 2 Player</label><input type="text" id="liveT2P1" placeholder="Player name">
+    `;
+  } else {
+    container.innerHTML = `
+      <label>Team 1 Player 1</label><input type="text" id="liveT1P1" placeholder="Player name">
+      <label>Team 1 Player 2</label><input type="text" id="liveT1P2" placeholder="Partner name">
+      <label>Team 2 Player 1</label><input type="text" id="liveT2P1" placeholder="Player name">
+      <label>Team 2 Player 2</label><input type="text" id="liveT2P2" placeholder="Partner name">
+    `;
+  }
+}
+
+async function startLiveMatch() {
+  const title = document.getElementById('liveTitle').value.trim() || 'Live Match';
+  const subtitle = document.getElementById('liveSubtitle').value.trim() || '';
+  const mode = document.getElementById('liveMode').value;
+  const t1p1 = document.getElementById('liveT1P1').value.trim() || 'Team 1';
+  const t2p1 = document.getElementById('liveT2P1').value.trim() || 'Team 2';
+  let t1p2 = '', t2p2 = '';
+  if (mode === 'doubles') {
+    t1p2 = document.getElementById('liveT1P2').value.trim() || 'Partner';
+    t2p2 = document.getElementById('liveT2P2').value.trim() || 'Partner';
+  }
+
+  const initialState = {
+    title,
+    subtitle,
+    mode,
+    team1: { name: t1p1, partner: t1p2, points: 0, games: 0, sets: 0 },
+    team2: { name: t2p1, partner: t2p2, points: 0, games: 0, sets: 0 },
+    serving: 'team1',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+
+  try {
+    const docRef = await db.collection('liveMatches').add(initialState);
+    liveMatchId = docRef.id;
+    liveRole = 'admin';
+    if (liveMatchListener) liveMatchListener();
+    liveMatchListener = db.collection('liveMatches').doc(liveMatchId)
+      .onSnapshot((doc) => {
+        if (doc.exists) {
+          liveMatchData = doc.data();
+          renderLiveAdminControls(document.getElementById('liveAdminControls'));
+        }
+      });
+    document.getElementById('liveAdminControls').style.display = 'block';
+    document.querySelector('.live-admin-card').style.display = 'none';
+  } catch (error) {
+    alert('Failed to start match: ' + error.message);
+  }
+}
+
+function renderLiveAdminControls(container) {
+  if (!liveMatchData) return;
+  const d = liveMatchData;
+  const pointsLabel = (points) => {
+    const tennisPoints = ['Love', '15', '30', '40'];
+    if (points < 4) return tennisPoints[points];
+    if (d.team1.points === d.team2.points) return 'Deuce';
+    return d.team1.points > d.team2.points ? 'AD' : '40';
+  };
+  container.innerHTML = `
+    <div class="card">
+      <h3>Live Controls - ${escapeHtml(d.title)}</h3>
+      <div style="display:flex;gap:12px;justify-content:space-around;">
+        <div>
+          <h4>${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</h4>
+          <p>Points: ${pointsLabel(d.team1.points)}</p>
+          <p>Games: ${d.team1.games}</p>
+          <p>Sets: ${d.team1.sets}</p>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'points', 1)">+ Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'points', -1)">- Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'games', 1)">+ Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'games', -1)">- Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'sets', 1)">+ Set</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'sets', -1)">- Set</button>
+        </div>
+        <div>
+          <h4>${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</h4>
+          <p>Points: ${pointsLabel(d.team2.points)}</p>
+          <p>Games: ${d.team2.games}</p>
+          <p>Sets: ${d.team2.sets}</p>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'points', 1)">+ Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'points', -1)">- Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'games', 1)">+ Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'games', -1)">- Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'sets', 1)">+ Set</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'sets', -1)">- Set</button>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <label>Serving</label>
+        <select onchange="updateServing(this.value)">
+          <option value="team1" ${d.serving === 'team1' ? 'selected' : ''}>${escapeHtml(d.team1.name)}</option>
+          <option value="team2" ${d.serving === 'team2' ? 'selected' : ''}>${escapeHtml(d.team2.name)}</option>
+        </select>
+        <button class="btn-danger" onclick="endLiveMatch()">End Match</button>
+      </div>
+    </div>
+  `;
+}
+
+window.updateLiveScore = async function(team, field, delta) {
+  if (!liveMatchData || !liveMatchId) return;
+  const updateObj = {};
+  updateObj[`${team}.${field}`] = firebase.firestore.FieldValue.increment(delta);
+  await db.collection('liveMatches').doc(liveMatchId).update(updateObj);
+};
+
+window.updateServing = async function(value) {
+  await db.collection('liveMatches').doc(liveMatchId).update({ serving: value });
+};
+
+window.endLiveMatch = async function() {
+  if (confirm('End match and delete it?')) {
+    await db.collection('liveMatches').doc(liveMatchId).delete();
+    if (liveMatchListener) liveMatchListener();
+    liveMatchListener = null;
+    liveMatchData = null;
+    liveMatchId = null;
+    renderAdminTab('live');
+  }
+};
+
+// ===================== CLIENT LIVE SCREEN =====================
+async function renderLiveScreen(container) {
+  container.innerHTML = '<p>Loading live matches...</p>';
+  const liveMatchesSnap = await db.collection('liveMatches').orderBy('createdAt', 'desc').get();
+  const matches = liveMatchesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  if (matches.length === 0) {
+    container.innerHTML = '<div class="card"><p>No live matches at the moment.</p></div>';
+    return;
+  }
+
+  let html = '<div class="card"><h3>Live Matches</h3>';
+  matches.forEach(m => {
+    html += `
+      <div class="card" style="cursor:pointer;" onclick="joinLiveMatchById('${m.id}')">
+        <strong>${escapeHtml(m.title)}</strong>
+        <p>${escapeHtml(m.subtitle || '')}</p>
+        <p>${escapeHtml(m.team1.name)} vs ${escapeHtml(m.team2.name)}</p>
+      </div>
+    `;
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+window.joinLiveMatchById = function(matchId) {
+  liveMatchId = matchId;
+  liveRole = 'viewer';
+  if (liveMatchListener) liveMatchListener();
+  liveMatchListener = db.collection('liveMatches').doc(matchId)
+    .onSnapshot((doc) => {
+      if (doc.exists) {
+        liveMatchData = doc.data();
+        renderViewerScoreboard(document.getElementById('mainContent'));
+      } else {
+        document.getElementById('mainContent').innerHTML = '<p>Match ended.</p>';
+        if (liveMatchListener) liveMatchListener();
+        liveMatchListener = null;
+        liveMatchId = null;
+        liveMatchData = null;
+      }
+    });
+};
+
+function renderViewerScoreboard(container) {
+  if (!liveMatchData) return;
+  const d = liveMatchData;
+  const pointsLabel = (points) => {
+    const tennisPoints = ['Love', '15', '30', '40'];
+    if (points < 4) return tennisPoints[points];
+    if (d.team1.points === d.team2.points) return 'Deuce';
+    return d.team1.points > d.team2.points ? 'AD' : '40';
+  };
+  container.innerHTML = `
+    <div class="live-scoreboard">
+      <div style="text-align:center;margin-bottom:15px;">
+        <h2>${escapeHtml(d.title)}</h2>
+        ${d.subtitle ? `<p>${escapeHtml(d.subtitle)}</p>` : ''}
+      </div>
+      <div class="team">
+        <div>
+          <div class="team-name">${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</div>
+          ${d.serving === 'team1' ? '<span class="serving-badge">SERVING</span>' : ''}
+        </div>
+        <div class="team-score">${pointsLabel(d.team1.points)}</div>
+      </div>
+      <div class="team">
+        <div>
+          <div class="team-name">${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</div>
+          ${d.serving === 'team2' ? '<span class="serving-badge">SERVING</span>' : ''}
+        </div>
+        <div class="team-score">${pointsLabel(d.team2.points)}</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:20px;">
+        <div>
+          Games: ${d.team1.games}
+          <br>Sets: ${d.team1.sets}
+        </div>
+        <div>
+          Games: ${d.team2.games}
+          <br>Sets: ${d.team2.sets}
+        </div>
+      </div>
+    </div>
+    <button class="btn-danger" onclick="leaveLiveRoom()">Leave Room</button>
+  `;
+  if (navigator.vibrate) navigator.vibrate(200);
+}
+
+window.leaveLiveRoom = function() {
+  if (liveMatchListener) liveMatchListener();
+  liveMatchListener = null;
+  liveMatchId = null;
+  liveMatchData = null;
+  renderLiveScreen(document.getElementById('mainContent'));
 };
 
 // ===================== INITIALIZATION =====================
