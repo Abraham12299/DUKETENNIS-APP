@@ -27,25 +27,27 @@
     </div>
   </div>
 
-  <!-- Onboarding Overlay -->
-  <div id="onboardingOverlay" style="display:none;">
-    <div class="onboarding-card">
-      <h2>Complete Your Profile</h2>
-      <p>Set your gender, username, and profile picture (optional).</p>
-      <label>Gender</label>
-      <select id="genderInput">
-        <option value="">Select gender</option>
-        <option value="Male">Male</option>
-        <option value="Female">Female</option>
-      </select>
-      <label>Username</label>
-      <input type="text" id="usernameInput" placeholder="Username" />
-      <label>Profile Picture (optional)</label>
-      <input type="file" id="profilePicInput" accept="image/*" />
-      <button class="btn-primary pill" id="saveUsernameBtn">Save</button>
-      <p id="usernameError" style="color:var(--red);font-size:0.8rem;margin-top:8px;"></p>
-    </div>
+ <!-- Onboarding Overlay -->
+<div id="onboardingOverlay" style="display:none;">
+  <div class="onboarding-card">
+    <h2>Complete Your Profile</h2>
+    <p>Set your gender, username, member ID, and optionally a profile picture.</p>
+    <label>Gender</label>
+    <select id="genderInput">
+      <option value="">Select gender</option>
+      <option value="Male">Male</option>
+      <option value="Female">Female</option>
+    </select>
+    <label>Username</label>
+    <input type="text" id="usernameInput" placeholder="Username" />
+    <label>Member ID (unique)</label>
+    <input type="text" id="memberIdInput" placeholder="e.g., DT001" />
+    <label>Profile Picture (optional)</label>
+    <input type="file" id="profilePicInput" accept="image/*" />
+    <button class="btn-primary pill" id="saveUsernameBtn">Save</button>
+    <p id="usernameError" style="color:var(--red);font-size:0.8rem;margin-top:8px;"></p>
   </div>
+
 
   <!-- App Screen -->
   <div id="appScreen">
