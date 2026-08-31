@@ -37,6 +37,13 @@ let liveMatchId = null;
 let liveMatchListener = null;
 let liveRole = null;
 let liveMatchData = null;
+let tiebreakTarget = 7;          // default tiebreak target points
+let isTiebreak = false;          // whether current set is in tiebreak
+let paymentTimerEnabled = true;  // admin toggle for 20s reminder timer
+let timerInterval = null;        // interval for payment reminder countdown
+
+// Client viewing history
+const VIEW_HISTORY_KEY = 'duketennis_view_history';
 
 // ===================== UTILITY FUNCTIONS =====================
 function formatDate(dateStr) {
@@ -132,7 +139,7 @@ auth.onAuthStateChanged(async (user) => {
     currentUser = user;
     try {
       await ensureUserProfile(user);
-      if (!userProfile.gender || !userProfile.username || userProfile.username.trim() === '' || !userProfile.profilePic) {
+      if (!userProfile.gender || !userProfile.username || userProfile.username.trim() === '') {
         showOnboarding();
       } else {
         hideOnboarding();
@@ -149,6 +156,7 @@ auth.onAuthStateChanged(async (user) => {
     document.getElementById('bottomNav').style.display = 'none';
     hideOnboarding();
     if (liveMatchListener) { liveMatchListener(); liveMatchListener = null; }
+    if (timerInterval) clearInterval(timerInterval);
   }
 });
 
@@ -184,27 +192,35 @@ document.getElementById('saveUsernameBtn').addEventListener('click', async () =>
   errorEl.textContent = '';
   if (!gender) { errorEl.textContent = 'Please select your gender.'; return; }
   if (!username) { errorEl.textContent = 'Username cannot be empty.'; return; }
-  if (!profilePicFile) { errorEl.textContent = 'Please upload a profile picture.'; return; }
 
   const q = await db.collection('users').where('username', '==', username).get();
   if (!q.empty && q.docs[0].id !== userProfile.uid) { errorEl.textContent = 'Username already taken.'; return; }
 
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    const profilePicDataUrl = e.target.result;
-    try {
-      await db.collection('users').doc(userProfile.uid).update({
-        username, gender, profilePic: profilePicDataUrl
-      });
-      userProfile.username = username; userProfile.gender = gender; userProfile.profilePic = profilePicDataUrl;
-      hideOnboarding();
-      renderCurrentScreen();
-    } catch (error) {
-      errorEl.textContent = 'Error saving profile: ' + error.message;
-    }
-  };
-  reader.readAsDataURL(profilePicFile);
+  let profilePicDataUrl = '';
+  if (profilePicFile) {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      profilePicDataUrl = e.target.result;
+      await saveProfile(username, gender, profilePicDataUrl, errorEl);
+    };
+    reader.readAsDataURL(profilePicFile);
+  } else {
+    await saveProfile(username, gender, '', errorEl);
+  }
 });
+
+async function saveProfile(username, gender, profilePicDataUrl, errorEl) {
+  try {
+    await db.collection('users').doc(userProfile.uid).update({
+      username, gender, profilePic: profilePicDataUrl
+    });
+    userProfile.username = username; userProfile.gender = gender; userProfile.profilePic = profilePicDataUrl;
+    hideOnboarding();
+    renderCurrentScreen();
+  } catch (error) {
+    errorEl.textContent = 'Error saving profile: ' + error.message;
+  }
+}
 
 // ===================== NAVIGATION =====================
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -306,6 +322,7 @@ async function renderClientDashboard(container) {
     }
 
     container.innerHTML = `
+      <button class="btn-outline" onclick="navigateTo('dashboard')" style="margin-bottom:10px;">← Back to Main Menu</button>
       <div class="hero">
         <div>
           <h1>Welcome, ${escapeHtml(userProfile.username || userProfile.name)}</h1>
@@ -323,6 +340,7 @@ async function renderClientDashboard(container) {
         <div class="card" style="background:var(--ball);color:var(--black);">
           <h3>Payment Reminder</h3>
           <p>Your monthly fee of GHS ${getMonthlyFee(weeklyLimit)} is due. Please settle to continue booking future sessions.</p>
+          ${paymentTimerEnabled ? `<div id="paymentTimer"></div>` : ''}
         </div>
       ` : ''}
 
@@ -391,11 +409,39 @@ async function renderClientDashboard(container) {
         `).join('')}
       </div>
     `;
+
+    // Start payment timer if enabled and not paid
+    if (!isPaid && userProfile.alertsEnabled && paymentTimerEnabled) {
+      startPaymentTimer();
+    }
   } catch (error) {
     console.error('Dashboard error:', error);
     container.innerHTML = `<div class="card"><p>Error loading dashboard: ${error.message}</p></div>`;
   }
 }
+
+function startPaymentTimer() {
+  const timerEl = document.getElementById('paymentTimer');
+  if (!timerEl) return;
+  let seconds = 20;
+  timerEl.textContent = `⏳ ${seconds}s`;
+  timerInterval = setInterval(() => {
+    seconds--;
+    if (seconds <= 0) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+      timerEl.innerHTML = '<button class="btn-primary" onclick="dismissPaymentReminder()">Dismiss</button>';
+    } else {
+      timerEl.textContent = `⏳ ${seconds}s`;
+    }
+  }, 1000);
+}
+
+window.dismissPaymentReminder = function() {
+  if (timerInterval) clearInterval(timerInterval);
+  const card = document.querySelector('.card[style*="background:var(--ball)"]');
+  if (card) card.remove();
+};
 
 window.clientChangeMonth = function(delta) {
   const [year, month] = clientAttendanceMonth.split('-').map(Number);
@@ -461,6 +507,7 @@ async function renderBookingForm(container) {
   const datePickerHtml = generateDatePicker();
 
   container.innerHTML = `
+    <button class="btn-outline" onclick="navigateTo('dashboard')">← Back to Main Menu</button>
     <div class="date-picker-container">
       <div class="date-picker-header">
         <h3>Tennis Action Now</h3>
@@ -696,6 +743,7 @@ async function renderRankings(container) {
   });
 
   container.innerHTML = `
+    <button class="btn-outline" onclick="navigateTo('dashboard')">← Back to Main Menu</button>
     <div class="card" style="border-left:4px solid var(--ball);">
       <h3 style="color:var(--black); font-size:1.4rem;">🏆 DUKETENNIS Ranking (All)</h3>
       <table>
@@ -1814,6 +1862,8 @@ async function renderAdminNotifications(container) {
           <option value="all">All Clients</option>
           ${allUsersCache.filter(u => u.role === 'client').map(u => `<option value="${u.uid}">${escapeHtml(u.username || u.name)}</option>`).join('')}
         </select>
+        <label>Enable 20s timer</label>
+        <input type="checkbox" id="paymentTimerToggle" ${paymentTimerEnabled ? 'checked' : ''} onchange="togglePaymentTimer(this.checked)">
         <button type="submit" class="btn-primary">Send Notification</button>
       </form>
     </div>
@@ -1862,6 +1912,10 @@ async function renderAdminNotifications(container) {
     }
   });
 }
+
+window.togglePaymentTimer = function(enabled) {
+  paymentTimerEnabled = enabled;
+};
 
 // ===================== ADMIN BILLING =====================
 async function renderAdminBilling(container) {
@@ -2030,6 +2084,358 @@ window.exportAnalyticsCSV = async function() {
   exportToCSV('analytics_clients.csv', rows);
 };
 
+// ===================== ADMIN LIVE SCOREBOARD =====================
+async function renderAdminLiveScoreboard(container) {
+  container.innerHTML = `
+    <div class="card live-admin-card">
+      <h3>Create Live Match</h3>
+      <p>No room code needed. The match will appear instantly for all clients.</p>
+      <label>Match Title</label>
+      <input type="text" id="liveTitle" placeholder="e.g., Championship Final">
+      <label>Subtitle</label>
+      <input type="text" id="liveSubtitle" placeholder="e.g., Gentlemen's Singles">
+      <label>Mode</label>
+      <select id="liveMode" onchange="updateLiveMode()">
+        <option value="singles">Singles</option>
+        <option value="doubles">Doubles</option>
+      </select>
+      <div id="livePlayerInputs"></div>
+      <label>Tiebreak Target Points</label>
+      <input type="number" id="tiebreakTargetInput" value="${tiebreakTarget}" min="1" max="20">
+      <button class="btn-primary" onclick="startLiveMatch()">Start Match</button>
+    </div>
+    <div id="liveAdminControls" style="display:none;"></div>
+  `;
+  updateLiveMode();
+}
+
+function updateLiveMode() {
+  const mode = document.getElementById('liveMode').value;
+  const container = document.getElementById('livePlayerInputs');
+  if (mode === 'singles') {
+    container.innerHTML = `
+      <label>Team 1 Player</label><input type="text" id="liveT1P1" placeholder="Player name">
+      <label>Team 2 Player</label><input type="text" id="liveT2P1" placeholder="Player name">
+    `;
+  } else {
+    container.innerHTML = `
+      <label>Team 1 Player 1</label><input type="text" id="liveT1P1" placeholder="Player name">
+      <label>Team 1 Player 2</label><input type="text" id="liveT1P2" placeholder="Partner name">
+      <label>Team 2 Player 1</label><input type="text" id="liveT2P1" placeholder="Player name">
+      <label>Team 2 Player 2</label><input type="text" id="liveT2P2" placeholder="Partner name">
+    `;
+  }
+}
+
+async function startLiveMatch() {
+  const title = document.getElementById('liveTitle').value.trim() || 'Live Match';
+  const subtitle = document.getElementById('liveSubtitle').value.trim() || '';
+  const mode = document.getElementById('liveMode').value;
+  const t1p1 = document.getElementById('liveT1P1').value.trim() || 'Team 1';
+  const t2p1 = document.getElementById('liveT2P1').value.trim() || 'Team 2';
+  let t1p2 = '', t2p2 = '';
+  if (mode === 'doubles') {
+    t1p2 = document.getElementById('liveT1P2').value.trim() || 'Partner';
+    t2p2 = document.getElementById('liveT2P2').value.trim() || 'Partner';
+  }
+  tiebreakTarget = parseInt(document.getElementById('tiebreakTargetInput').value) || 7;
+
+  const initialState = {
+    title,
+    subtitle,
+    mode,
+    team1: { name: t1p1, partner: t1p2, points: 0, games: 0, sets: 0 },
+    team2: { name: t2p1, partner: t2p2, points: 0, games: 0, sets: 0 },
+    serving: 'team1',
+    tiebreakTarget: tiebreakTarget,
+    isTiebreak: false,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+
+  try {
+    const docRef = await db.collection('liveMatches').add(initialState);
+    liveMatchId = docRef.id;
+    liveRole = 'admin';
+    if (liveMatchListener) liveMatchListener();
+    liveMatchListener = db.collection('liveMatches').doc(liveMatchId)
+      .onSnapshot((doc) => {
+        if (doc.exists) {
+          liveMatchData = doc.data();
+          renderLiveAdminControls(document.getElementById('liveAdminControls'));
+        }
+      });
+    document.getElementById('liveAdminControls').style.display = 'block';
+    document.querySelector('.live-admin-card').style.display = 'none';
+  } catch (error) {
+    alert('Failed to start match: ' + error.message);
+  }
+}
+
+function renderLiveAdminControls(container) {
+  if (!liveMatchData) return;
+  const d = liveMatchData;
+  const isTiebreak = d.isTiebreak || false;
+  const pointsLabel = (teamKey) => {
+    if (isTiebreak) {
+      return d[teamKey].points;
+    }
+    const t1p = d.team1.points, t2p = d.team2.points;
+    const points = teamKey === 'team1' ? t1p : t2p;
+    if (t1p >= 3 && t2p >= 3) {
+      if (t1p === t2p) return 'Deuce';
+      return t1p > t2p ? 'AD' : '40';
+    }
+    const arr = ['Love', '15', '30', '40'];
+    return arr[Math.min(points, 3)] || '40';
+  };
+  container.innerHTML = `
+    <div class="card">
+      <h3>Live Controls - ${escapeHtml(d.title)} ${isTiebreak ? ' (Tiebreak)' : ''}</h3>
+      <div style="display:flex;gap:12px;justify-content:space-around;">
+        <div>
+          <h4>${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</h4>
+          <p>Points: ${pointsLabel('team1')}</p>
+          <p>Games: ${d.team1.games}</p>
+          <p>Sets: ${d.team1.sets}</p>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'points', 1)">+ Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'points', -1)">- Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'games', 1)">+ Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'games', -1)">- Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'sets', 1)">+ Set</button>
+          <button class="btn-outline" onclick="updateLiveScore('team1', 'sets', -1)">- Set</button>
+        </div>
+        <div>
+          <h4>${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</h4>
+          <p>Points: ${pointsLabel('team2')}</p>
+          <p>Games: ${d.team2.games}</p>
+          <p>Sets: ${d.team2.sets}</p>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'points', 1)">+ Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'points', -1)">- Point</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'games', 1)">+ Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'games', -1)">- Game</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'sets', 1)">+ Set</button>
+          <button class="btn-outline" onclick="updateLiveScore('team2', 'sets', -1)">- Set</button>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <label>Serving</label>
+        <select onchange="updateServing(this.value)">
+          <option value="team1" ${d.serving === 'team1' ? 'selected' : ''}>${escapeHtml(d.team1.name)}</option>
+          <option value="team2" ${d.serving === 'team2' ? 'selected' : ''}>${escapeHtml(d.team2.name)}</option>
+        </select>
+        <button class="btn-danger" onclick="endLiveMatch()">End Match</button>
+      </div>
+    </div>
+  `;
+}
+
+window.updateLiveScore = async function(team, field, delta) {
+  if (!liveMatchData || !liveMatchId) return;
+  const updateObj = {};
+  updateObj[`${team}.${field}`] = firebase.firestore.FieldValue.increment(delta);
+  await db.collection('liveMatches').doc(liveMatchId).update(updateObj);
+
+  // Auto game/set advancement
+  if (field === 'points' && delta === 1) {
+    const updated = { ...liveMatchData };
+    updated[team].points += 1;
+    const other = team === 'team1' ? 'team2' : 'team1';
+    const points = updated[team].points;
+    const otherPoints = updated[other].points;
+    if (updated.isTiebreak) {
+      // Tiebreak win condition
+      if (points >= updated.tiebreakTarget && points - otherPoints >= 2) {
+        // win set
+        updated[team].sets += 1;
+        updated.team1.points = 0;
+        updated.team2.points = 0;
+        updated.team1.games = 0;
+        updated.team2.games = 0;
+        updated.isTiebreak = false;
+        await db.collection('liveMatches').doc(liveMatchId).update({
+          [`${team}.sets`]: firebase.firestore.FieldValue.increment(1),
+          'team1.points': 0,
+          'team2.points': 0,
+          'team1.games': 0,
+          'team2.games': 0,
+          isTiebreak: false
+        });
+      }
+    } else {
+      // Normal game win condition
+      if (points >= 4 && points - otherPoints >= 2) {
+        updated[team].games += 1;
+        updated.team1.points = 0;
+        updated.team2.points = 0;
+        await db.collection('liveMatches').doc(liveMatchId).update({
+          [`${team}.games`]: firebase.firestore.FieldValue.increment(1),
+          'team1.points': 0,
+          'team2.points': 0
+        });
+        // Check set win
+        const games = updated[team].games;
+        const otherGames = updated[other].games;
+        if (games >= 6 && games - otherGames >= 2) {
+          updated[team].sets += 1;
+          updated.team1.games = 0;
+          updated.team2.games = 0;
+          await db.collection('liveMatches').doc(liveMatchId).update({
+            [`${team}.sets`]: firebase.firestore.FieldValue.increment(1),
+            'team1.games': 0,
+            'team2.games': 0
+          });
+        } else if (games === 6 && otherGames === 6) {
+          // Start tiebreak
+          updated.isTiebreak = true;
+          await db.collection('liveMatches').doc(liveMatchId).update({ isTiebreak: true });
+        }
+      }
+    }
+  }
+};
+
+window.updateServing = async function(value) {
+  await db.collection('liveMatches').doc(liveMatchId).update({ serving: value });
+};
+
+window.endLiveMatch = async function() {
+  if (confirm('End match and delete it?')) {
+    await db.collection('liveMatches').doc(liveMatchId).delete();
+    if (liveMatchListener) liveMatchListener();
+    liveMatchListener = null;
+    liveMatchData = null;
+    liveMatchId = null;
+    renderAdminTab('live');
+  }
+};
+
+// ===================== CLIENT LIVE SCREEN =====================
+async function renderLiveScreen(container) {
+  container.innerHTML = '<p>Loading live matches...</p>';
+  const liveMatchesSnap = await db.collection('liveMatches').orderBy('createdAt', 'desc').get();
+  const matches = liveMatchesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Show viewing history
+  const history = JSON.parse(localStorage.getItem(VIEW_HISTORY_KEY) || '[]');
+
+  if (matches.length === 0) {
+    container.innerHTML = '<div class="card"><p>No live matches at the moment.</p></div>';
+    if (history.length > 0) {
+      container.innerHTML += '<div class="card"><h3>Your History</h3>';
+      history.forEach(item => {
+        container.innerHTML += `<div class="card"><strong>${escapeHtml(item.title)}</strong> <button class="btn-danger" onclick="deleteHistoryItem('${item.id}')">Delete</button></div>`;
+      });
+      container.innerHTML += '</div>';
+    }
+    return;
+  }
+
+  let html = '<div class="card"><h3>Live Matches</h3>';
+  matches.forEach(m => {
+    html += `
+      <div class="card" style="cursor:pointer;" onclick="joinLiveMatchById('${m.id}')">
+        <strong>${escapeHtml(m.title)}</strong>
+        <p>${escapeHtml(m.subtitle || '')}</p>
+        <p>${escapeHtml(m.team1.name)} vs ${escapeHtml(m.team2.name)}</p>
+      </div>
+    `;
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+window.joinLiveMatchById = function(matchId) {
+  liveMatchId = matchId;
+  liveRole = 'viewer';
+  if (liveMatchListener) liveMatchListener();
+  liveMatchListener = db.collection('liveMatches').doc(matchId)
+    .onSnapshot((doc) => {
+      if (doc.exists) {
+        liveMatchData = doc.data();
+        renderViewerScoreboard(document.getElementById('mainContent'));
+        // Save to history
+        const history = JSON.parse(localStorage.getItem(VIEW_HISTORY_KEY) || '[]');
+        const exists = history.find(h => h.id === matchId);
+        if (!exists) {
+          history.unshift({ id: matchId, title: liveMatchData.title, date: new Date().toISOString() });
+          localStorage.setItem(VIEW_HISTORY_KEY, JSON.stringify(history.slice(0,20)));
+        }
+      } else {
+        document.getElementById('mainContent').innerHTML = '<p>Match ended.</p>';
+        if (liveMatchListener) liveMatchListener();
+        liveMatchListener = null;
+        liveMatchId = null;
+        liveMatchData = null;
+      }
+    });
+};
+
+function renderViewerScoreboard(container) {
+  if (!liveMatchData) return;
+  const d = liveMatchData;
+  const isTiebreak = d.isTiebreak || false;
+  const pointsLabel = (teamKey) => {
+    if (isTiebreak) return d[teamKey].points;
+    const t1p = d.team1.points, t2p = d.team2.points;
+    const points = teamKey === 'team1' ? t1p : t2p;
+    if (t1p >= 3 && t2p >= 3) {
+      if (t1p === t2p) return 'Deuce';
+      return t1p > t2p ? 'AD' : '40';
+    }
+    const arr = ['Love', '15', '30', '40'];
+    return arr[Math.min(points, 3)] || '40';
+  };
+  container.innerHTML = `
+    <div class="live-scoreboard">
+      <div style="text-align:center;margin-bottom:15px;">
+        <h2>${escapeHtml(d.title)} ${isTiebreak ? ' (Tiebreak)' : ''}</h2>
+        ${d.subtitle ? `<p>${escapeHtml(d.subtitle)}</p>` : ''}
+      </div>
+      <div class="team">
+        <div>
+          <div class="team-name">${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</div>
+          ${d.serving === 'team1' ? '<span class="serving-badge">SERVING</span>' : ''}
+        </div>
+        <div class="team-score">${pointsLabel('team1')}</div>
+      </div>
+      <div class="team">
+        <div>
+          <div class="team-name">${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</div>
+          ${d.serving === 'team2' ? '<span class="serving-badge">SERVING</span>' : ''}
+        </div>
+        <div class="team-score">${pointsLabel('team2')}</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:20px;">
+        <div>
+          Games: ${d.team1.games}
+          <br>Sets: ${d.team1.sets}
+        </div>
+        <div>
+          Games: ${d.team2.games}
+          <br>Sets: ${d.team2.sets}
+        </div>
+      </div>
+    </div>
+    <button class="btn-danger" onclick="leaveLiveRoom()">Leave</button>
+  `;
+  if (navigator.vibrate) navigator.vibrate(200);
+}
+
+window.leaveLiveRoom = function() {
+  if (liveMatchListener) liveMatchListener();
+  liveMatchListener = null;
+  liveMatchId = null;
+  liveMatchData = null;
+  renderLiveScreen(document.getElementById('mainContent'));
+};
+
+window.deleteHistoryItem = function(id) {
+  let history = JSON.parse(localStorage.getItem(VIEW_HISTORY_KEY) || '[]');
+  history = history.filter(item => item.id !== id);
+  localStorage.setItem(VIEW_HISTORY_KEY, JSON.stringify(history));
+  renderLiveScreen(document.getElementById('mainContent'));
+};
+
 // ===================== ADMIN MESSAGES =====================
 async function renderAdminMessages(container) {
   container.innerHTML = '<div class="card"><p>Loading...</p></div>';
@@ -2104,257 +2510,6 @@ window.adminOpenConversation = function(convId) {
   }
   document.getElementById('adminSendMessageBtn').addEventListener('click', sendMessage);
   messageInput.addEventListener('keypress', (e) => { if (e.key==='Enter') sendMessage(); });
-};
-
-// ===================== ADMIN LIVE SCOREBOARD =====================
-async function renderAdminLiveScoreboard(container) {
-  container.innerHTML = `
-    <div class="card live-admin-card">
-      <h3>Create Live Match</h3>
-      <p>No room code needed. The match will appear instantly for all clients.</p>
-      <label>Match Title</label>
-      <input type="text" id="liveTitle" placeholder="e.g., Championship Final">
-      <label>Subtitle</label>
-      <input type="text" id="liveSubtitle" placeholder="e.g., Gentlemen's Singles">
-      <label>Mode</label>
-      <select id="liveMode" onchange="updateLiveMode()">
-        <option value="singles">Singles</option>
-        <option value="doubles">Doubles</option>
-      </select>
-      <div id="livePlayerInputs"></div>
-      <button class="btn-primary" onclick="startLiveMatch()">Start Match</button>
-    </div>
-    <div id="liveAdminControls" style="display:none;"></div>
-  `;
-  updateLiveMode();
-}
-
-function updateLiveMode() {
-  const mode = document.getElementById('liveMode').value;
-  const container = document.getElementById('livePlayerInputs');
-  if (mode === 'singles') {
-    container.innerHTML = `
-      <label>Team 1 Player</label><input type="text" id="liveT1P1" placeholder="Player name">
-      <label>Team 2 Player</label><input type="text" id="liveT2P1" placeholder="Player name">
-    `;
-  } else {
-    container.innerHTML = `
-      <label>Team 1 Player 1</label><input type="text" id="liveT1P1" placeholder="Player name">
-      <label>Team 1 Player 2</label><input type="text" id="liveT1P2" placeholder="Partner name">
-      <label>Team 2 Player 1</label><input type="text" id="liveT2P1" placeholder="Player name">
-      <label>Team 2 Player 2</label><input type="text" id="liveT2P2" placeholder="Partner name">
-    `;
-  }
-}
-
-async function startLiveMatch() {
-  const title = document.getElementById('liveTitle').value.trim() || 'Live Match';
-  const subtitle = document.getElementById('liveSubtitle').value.trim() || '';
-  const mode = document.getElementById('liveMode').value;
-  const t1p1 = document.getElementById('liveT1P1').value.trim() || 'Team 1';
-  const t2p1 = document.getElementById('liveT2P1').value.trim() || 'Team 2';
-  let t1p2 = '', t2p2 = '';
-  if (mode === 'doubles') {
-    t1p2 = document.getElementById('liveT1P2').value.trim() || 'Partner';
-    t2p2 = document.getElementById('liveT2P2').value.trim() || 'Partner';
-  }
-
-  const initialState = {
-    title,
-    subtitle,
-    mode,
-    team1: { name: t1p1, partner: t1p2, points: 0, games: 0, sets: 0 },
-    team2: { name: t2p1, partner: t2p2, points: 0, games: 0, sets: 0 },
-    serving: 'team1',
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
-
-  try {
-    const docRef = await db.collection('liveMatches').add(initialState);
-    liveMatchId = docRef.id;
-    liveRole = 'admin';
-    if (liveMatchListener) liveMatchListener();
-    liveMatchListener = db.collection('liveMatches').doc(liveMatchId)
-      .onSnapshot((doc) => {
-        if (doc.exists) {
-          liveMatchData = doc.data();
-          renderLiveAdminControls(document.getElementById('liveAdminControls'));
-        }
-      });
-    document.getElementById('liveAdminControls').style.display = 'block';
-    document.querySelector('.live-admin-card').style.display = 'none';
-  } catch (error) {
-    alert('Failed to start match: ' + error.message);
-  }
-}
-
-function renderLiveAdminControls(container) {
-  if (!liveMatchData) return;
-  const d = liveMatchData;
-  const pointsLabel = (points) => {
-    const tennisPoints = ['Love', '15', '30', '40'];
-    if (points < 4) return tennisPoints[points];
-    if (d.team1.points === d.team2.points) return 'Deuce';
-    return d.team1.points > d.team2.points ? 'AD' : '40';
-  };
-  container.innerHTML = `
-    <div class="card">
-      <h3>Live Controls - ${escapeHtml(d.title)}</h3>
-      <div style="display:flex;gap:12px;justify-content:space-around;">
-        <div>
-          <h4>${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</h4>
-          <p>Points: ${pointsLabel(d.team1.points)}</p>
-          <p>Games: ${d.team1.games}</p>
-          <p>Sets: ${d.team1.sets}</p>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'points', 1)">+ Point</button>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'points', -1)">- Point</button>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'games', 1)">+ Game</button>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'games', -1)">- Game</button>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'sets', 1)">+ Set</button>
-          <button class="btn-outline" onclick="updateLiveScore('team1', 'sets', -1)">- Set</button>
-        </div>
-        <div>
-          <h4>${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</h4>
-          <p>Points: ${pointsLabel(d.team2.points)}</p>
-          <p>Games: ${d.team2.games}</p>
-          <p>Sets: ${d.team2.sets}</p>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'points', 1)">+ Point</button>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'points', -1)">- Point</button>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'games', 1)">+ Game</button>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'games', -1)">- Game</button>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'sets', 1)">+ Set</button>
-          <button class="btn-outline" onclick="updateLiveScore('team2', 'sets', -1)">- Set</button>
-        </div>
-      </div>
-      <div style="margin-top:12px;">
-        <label>Serving</label>
-        <select onchange="updateServing(this.value)">
-          <option value="team1" ${d.serving === 'team1' ? 'selected' : ''}>${escapeHtml(d.team1.name)}</option>
-          <option value="team2" ${d.serving === 'team2' ? 'selected' : ''}>${escapeHtml(d.team2.name)}</option>
-        </select>
-        <button class="btn-danger" onclick="endLiveMatch()">End Match</button>
-      </div>
-    </div>
-  `;
-}
-
-window.updateLiveScore = async function(team, field, delta) {
-  if (!liveMatchData || !liveMatchId) return;
-  const updateObj = {};
-  updateObj[`${team}.${field}`] = firebase.firestore.FieldValue.increment(delta);
-  await db.collection('liveMatches').doc(liveMatchId).update(updateObj);
-};
-
-window.updateServing = async function(value) {
-  await db.collection('liveMatches').doc(liveMatchId).update({ serving: value });
-};
-
-window.endLiveMatch = async function() {
-  if (confirm('End match and delete it?')) {
-    await db.collection('liveMatches').doc(liveMatchId).delete();
-    if (liveMatchListener) liveMatchListener();
-    liveMatchListener = null;
-    liveMatchData = null;
-    liveMatchId = null;
-    renderAdminTab('live');
-  }
-};
-
-// ===================== CLIENT LIVE SCREEN =====================
-async function renderLiveScreen(container) {
-  container.innerHTML = '<p>Loading live matches...</p>';
-  const liveMatchesSnap = await db.collection('liveMatches').orderBy('createdAt', 'desc').get();
-  const matches = liveMatchesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-  if (matches.length === 0) {
-    container.innerHTML = '<div class="card"><p>No live matches at the moment.</p></div>';
-    return;
-  }
-
-  let html = '<div class="card"><h3>Live Matches</h3>';
-  matches.forEach(m => {
-    html += `
-      <div class="card" style="cursor:pointer;" onclick="joinLiveMatchById('${m.id}')">
-        <strong>${escapeHtml(m.title)}</strong>
-        <p>${escapeHtml(m.subtitle || '')}</p>
-        <p>${escapeHtml(m.team1.name)} vs ${escapeHtml(m.team2.name)}</p>
-      </div>
-    `;
-  });
-  html += '</div>';
-  container.innerHTML = html;
-}
-
-window.joinLiveMatchById = function(matchId) {
-  liveMatchId = matchId;
-  liveRole = 'viewer';
-  if (liveMatchListener) liveMatchListener();
-  liveMatchListener = db.collection('liveMatches').doc(matchId)
-    .onSnapshot((doc) => {
-      if (doc.exists) {
-        liveMatchData = doc.data();
-        renderViewerScoreboard(document.getElementById('mainContent'));
-      } else {
-        document.getElementById('mainContent').innerHTML = '<p>Match ended.</p>';
-        if (liveMatchListener) liveMatchListener();
-        liveMatchListener = null;
-        liveMatchId = null;
-        liveMatchData = null;
-      }
-    });
-};
-
-function renderViewerScoreboard(container) {
-  if (!liveMatchData) return;
-  const d = liveMatchData;
-  const pointsLabel = (points) => {
-    const tennisPoints = ['Love', '15', '30', '40'];
-    if (points < 4) return tennisPoints[points];
-    if (d.team1.points === d.team2.points) return 'Deuce';
-    return d.team1.points > d.team2.points ? 'AD' : '40';
-  };
-  container.innerHTML = `
-    <div class="live-scoreboard">
-      <div style="text-align:center;margin-bottom:15px;">
-        <h2>${escapeHtml(d.title)}</h2>
-        ${d.subtitle ? `<p>${escapeHtml(d.subtitle)}</p>` : ''}
-      </div>
-      <div class="team">
-        <div>
-          <div class="team-name">${escapeHtml(d.team1.name)}${d.team1.partner ? ' / ' + escapeHtml(d.team1.partner) : ''}</div>
-          ${d.serving === 'team1' ? '<span class="serving-badge">SERVING</span>' : ''}
-        </div>
-        <div class="team-score">${pointsLabel(d.team1.points)}</div>
-      </div>
-      <div class="team">
-        <div>
-          <div class="team-name">${escapeHtml(d.team2.name)}${d.team2.partner ? ' / ' + escapeHtml(d.team2.partner) : ''}</div>
-          ${d.serving === 'team2' ? '<span class="serving-badge">SERVING</span>' : ''}
-        </div>
-        <div class="team-score">${pointsLabel(d.team2.points)}</div>
-      </div>
-      <div style="display:flex;justify-content:space-between;margin-top:20px;">
-        <div>
-          Games: ${d.team1.games}
-          <br>Sets: ${d.team1.sets}
-        </div>
-        <div>
-          Games: ${d.team2.games}
-          <br>Sets: ${d.team2.sets}
-        </div>
-      </div>
-    </div>
-    <button class="btn-danger" onclick="leaveLiveRoom()">Leave Room</button>
-  `;
-  if (navigator.vibrate) navigator.vibrate(200);
-}
-
-window.leaveLiveRoom = function() {
-  if (liveMatchListener) liveMatchListener();
-  liveMatchListener = null;
-  liveMatchId = null;
-  liveMatchData = null;
-  renderLiveScreen(document.getElementById('mainContent'));
 };
 
 // ===================== INITIALIZATION =====================
