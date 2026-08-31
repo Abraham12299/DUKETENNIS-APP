@@ -37,12 +37,11 @@ let liveMatchId = null;
 let liveMatchListener = null;
 let liveRole = null;
 let liveMatchData = null;
-let tiebreakTarget = 7;          // default tiebreak target points
-let isTiebreak = false;          // whether current set is in tiebreak
-let paymentTimerEnabled = true;  // admin toggle for 20s reminder timer
-let timerInterval = null;        // interval for payment reminder countdown
+let tiebreakTarget = 7;
+let isTiebreak = false;
+let paymentTimerEnabled = true;
+let timerInterval = null;
 
-// Client viewing history
 const VIEW_HISTORY_KEY = 'duketennis_view_history';
 
 // ===================== UTILITY FUNCTIONS =====================
@@ -139,7 +138,7 @@ auth.onAuthStateChanged(async (user) => {
     currentUser = user;
     try {
       await ensureUserProfile(user);
-      if (!userProfile.gender || !userProfile.username || userProfile.username.trim() === '') {
+      if (!userProfile.gender || !userProfile.username || userProfile.username.trim() === '' || !userProfile.memberId || userProfile.memberId.trim() === '') {
         showOnboarding();
       } else {
         hideOnboarding();
@@ -172,7 +171,7 @@ async function ensureUserProfile(user) {
       uid: user.uid, email: user.email || '', name: user.displayName || 'Tennis Player',
       role: isAdmin ? 'admin' : 'client', skillCategory: 'Beginner', weeklySessions: 1,
       points: 0, matchesWon: 0, matchesLost: 0, username: '', gender: '',
-      profilePic: '', coverPic: '', alertsEnabled: true, paidThroughMonth: '',
+      memberId: '', profilePic: '', coverPic: '', alertsEnabled: true, paidThroughMonth: '',
       phone: '', lastActive: firebase.firestore.FieldValue.serverTimestamp(),
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
@@ -187,34 +186,48 @@ function hideOnboarding() { document.getElementById('onboardingOverlay').style.d
 document.getElementById('saveUsernameBtn').addEventListener('click', async () => {
   const username = document.getElementById('usernameInput').value.trim();
   const gender = document.getElementById('genderInput').value;
+  const memberId = document.getElementById('memberIdInput').value.trim();
   const profilePicFile = document.getElementById('profilePicInput').files[0];
   const errorEl = document.getElementById('usernameError');
   errorEl.textContent = '';
   if (!gender) { errorEl.textContent = 'Please select your gender.'; return; }
   if (!username) { errorEl.textContent = 'Username cannot be empty.'; return; }
+  if (!memberId) { errorEl.textContent = 'Member ID cannot be empty.'; return; }
 
-  const q = await db.collection('users').where('username', '==', username).get();
-  if (!q.empty && q.docs[0].id !== userProfile.uid) { errorEl.textContent = 'Username already taken.'; return; }
+  const usernameCheck = await db.collection('users').where('username', '==', username).get();
+  if (!usernameCheck.empty && usernameCheck.docs[0].id !== userProfile.uid) {
+    errorEl.textContent = 'Username already taken.';
+    return;
+  }
+
+  const memberIdCheck = await db.collection('users').where('memberId', '==', memberId).get();
+  if (!memberIdCheck.empty && memberIdCheck.docs[0].id !== userProfile.uid) {
+    errorEl.textContent = 'Member ID already taken.';
+    return;
+  }
 
   let profilePicDataUrl = '';
   if (profilePicFile) {
     const reader = new FileReader();
     reader.onload = async (e) => {
       profilePicDataUrl = e.target.result;
-      await saveProfile(username, gender, profilePicDataUrl, errorEl);
+      await saveProfile(username, gender, memberId, profilePicDataUrl, errorEl);
     };
     reader.readAsDataURL(profilePicFile);
   } else {
-    await saveProfile(username, gender, '', errorEl);
+    await saveProfile(username, gender, memberId, '', errorEl);
   }
 });
 
-async function saveProfile(username, gender, profilePicDataUrl, errorEl) {
+async function saveProfile(username, gender, memberId, profilePicDataUrl, errorEl) {
   try {
     await db.collection('users').doc(userProfile.uid).update({
-      username, gender, profilePic: profilePicDataUrl
+      username, gender, memberId, profilePic: profilePicDataUrl
     });
-    userProfile.username = username; userProfile.gender = gender; userProfile.profilePic = profilePicDataUrl;
+    userProfile.username = username;
+    userProfile.gender = gender;
+    userProfile.memberId = memberId;
+    userProfile.profilePic = profilePicDataUrl;
     hideOnboarding();
     renderCurrentScreen();
   } catch (error) {
@@ -236,7 +249,7 @@ function navigateTo(screen) {
 
 function renderCurrentScreen() {
   if (!currentUser || !userProfile) return;
-  if (userProfile.role === 'client' && (!userProfile.username || userProfile.username.trim() === '')) {
+  if (userProfile.role === 'client' && (!userProfile.username || userProfile.username.trim() === '' || !userProfile.memberId)) {
     document.getElementById('mainContent').innerHTML = '';
     document.getElementById('pageTitle').textContent = 'Set Username';
     return;
@@ -410,7 +423,6 @@ async function renderClientDashboard(container) {
       </div>
     `;
 
-    // Start payment timer if enabled and not paid
     if (!isPaid && userProfile.alertsEnabled && paymentTimerEnabled) {
       startPaymentTimer();
     }
@@ -997,6 +1009,7 @@ async function renderProfile(container) {
           </div>
           <h3 style="text-align:center;">${escapeHtml(profile.username || profile.name)}</h3>
           <p style="text-align:center;color:var(--gray-600);">${profile.role}</p>
+          <p style="text-align:center;">Member ID: ${escapeHtml(profile.memberId || 'Not set')}</p>
           <div style="display:flex;gap:8px;margin-top:12px;">
             <label class="btn-outline" style="flex:1;text-align:center;cursor:pointer;">
               Change Profile Picture
@@ -1609,16 +1622,21 @@ async function renderAdminUsers(container) {
         <label>Password</label><input type="password" id="newUserPassword" required minlength="6">
         <label>Role</label><select id="newUserRole"><option value="client">Client</option><option value="admin">Admin</option></select>
         <label>Gender</label><select id="newUserGender"><option value="Male">Male</option><option value="Female">Female</option></select>
+        <label>Member ID</label><input id="newMemberId" required>
         <button type="submit" class="btn-primary">Create User</button>
       </form>
     </div>
     <div class="card">
       <h3>All Users</h3>
       <table>
-        <tr><th>Username</th><th>Name</th><th>Role</th><th>Gender</th><th>Weekly Sessions</th><th>Phone</th><th>Second Phone</th><th>Emergency Contact</th><th>Action</th></tr>
+        <tr>
+          <th>Username</th><th>Name</th><th>Member ID</th><th>Role</th><th>Gender</th>
+          <th>Weekly Sessions</th><th>Phone</th><th>Second Phone</th><th>Emergency Contact</th><th>Action</th>
+        </tr>
         ${users.map(u => `<tr>
           <td>${escapeHtml(u.username||'Not set')}</td>
           <td>${escapeHtml(u.name)}</td>
+          <td><input type="text" value="${escapeHtml(u.memberId || '')}" onchange="updateMemberId('${u.uid}', this.value)"></td>
           <td><select onchange="updateUserRole('${u.uid}', this.value)"><option value="client" ${u.role==='client'?'selected':''}>Client</option><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option></select></td>
           <td><select onchange="updateUserGender('${u.uid}', this.value)"><option value="Male" ${u.gender==='Male'?'selected':''}>Male</option><option value="Female" ${u.gender==='Female'?'selected':''}>Female</option></select></td>
           <td><select onchange="updateWeeklySessions('${u.uid}', parseInt(this.value))"><option value="1" ${(u.weeklySessions||1)===1?'selected':''}>1x</option><option value="2" ${(u.weeklySessions||1)===2?'selected':''}>2x</option><option value="3" ${(u.weeklySessions||1)===3?'selected':''}>3x</option></select></td>
@@ -1638,7 +1656,8 @@ async function renderAdminUsers(container) {
     const password = document.getElementById('newUserPassword').value;
     const role = document.getElementById('newUserRole').value;
     const gender = document.getElementById('newUserGender').value;
-    if (!name || !email || !password) return alert('Please fill all fields.');
+    const memberId = document.getElementById('newMemberId').value.trim();
+    if (!name || !email || !password || !memberId) return alert('Please fill all fields.');
     if (password.length < 6) return alert('Password must be at least 6 characters.');
     try {
       const userCredential = await auth.createUserWithEmailAndPassword(email, password);
@@ -1646,7 +1665,7 @@ async function renderAdminUsers(container) {
       await db.collection('users').doc(userCredential.user.uid).set({
         uid: userCredential.user.uid, email, name, role, gender,
         weeklySessions: 1, points: 0, matchesWon: 0, matchesLost: 0,
-        username: '', profilePic: '', coverPic: '',
+        username: '', memberId, profilePic: '', coverPic: '',
         phone: '', lastActive: firebase.firestore.FieldValue.serverTimestamp(),
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
@@ -1709,6 +1728,19 @@ window.removeUser = async function(uid) {
     alert('User removed.');
     renderAdminTab('users');
   } catch (error) { alert('Failed to remove user: ' + error.message); }
+};
+
+window.updateMemberId = async function(uid, memberId) {
+  if (!memberId.trim()) return alert('Member ID cannot be empty.');
+  const q = await db.collection('users').where('memberId', '==', memberId).get();
+  if (!q.empty && q.docs[0].id !== uid) {
+    alert('Member ID already taken.');
+    renderAdminTab('users');
+    return;
+  }
+  await db.collection('users').doc(uid).update({ memberId });
+  alert('Member ID updated.');
+  renderAdminTab('users');
 };
 
 // ===================== ADMIN RANKINGS =====================
@@ -2176,9 +2208,7 @@ function renderLiveAdminControls(container) {
   const d = liveMatchData;
   const isTiebreak = d.isTiebreak || false;
   const pointsLabel = (teamKey) => {
-    if (isTiebreak) {
-      return d[teamKey].points;
-    }
+    if (isTiebreak) return d[teamKey].points;
     const t1p = d.team1.points, t2p = d.team2.points;
     const points = teamKey === 'team1' ? t1p : t2p;
     if (t1p >= 3 && t2p >= 3) {
@@ -2235,7 +2265,6 @@ window.updateLiveScore = async function(team, field, delta) {
   updateObj[`${team}.${field}`] = firebase.firestore.FieldValue.increment(delta);
   await db.collection('liveMatches').doc(liveMatchId).update(updateObj);
 
-  // Auto game/set advancement
   if (field === 'points' && delta === 1) {
     const updated = { ...liveMatchData };
     updated[team].points += 1;
@@ -2243,9 +2272,7 @@ window.updateLiveScore = async function(team, field, delta) {
     const points = updated[team].points;
     const otherPoints = updated[other].points;
     if (updated.isTiebreak) {
-      // Tiebreak win condition
       if (points >= updated.tiebreakTarget && points - otherPoints >= 2) {
-        // win set
         updated[team].sets += 1;
         updated.team1.points = 0;
         updated.team2.points = 0;
@@ -2262,7 +2289,6 @@ window.updateLiveScore = async function(team, field, delta) {
         });
       }
     } else {
-      // Normal game win condition
       if (points >= 4 && points - otherPoints >= 2) {
         updated[team].games += 1;
         updated.team1.points = 0;
@@ -2272,7 +2298,6 @@ window.updateLiveScore = async function(team, field, delta) {
           'team1.points': 0,
           'team2.points': 0
         });
-        // Check set win
         const games = updated[team].games;
         const otherGames = updated[other].games;
         if (games >= 6 && games - otherGames >= 2) {
@@ -2285,7 +2310,6 @@ window.updateLiveScore = async function(team, field, delta) {
             'team2.games': 0
           });
         } else if (games === 6 && otherGames === 6) {
-          // Start tiebreak
           updated.isTiebreak = true;
           await db.collection('liveMatches').doc(liveMatchId).update({ isTiebreak: true });
         }
@@ -2315,7 +2339,6 @@ async function renderLiveScreen(container) {
   const liveMatchesSnap = await db.collection('liveMatches').orderBy('createdAt', 'desc').get();
   const matches = liveMatchesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  // Show viewing history
   const history = JSON.parse(localStorage.getItem(VIEW_HISTORY_KEY) || '[]');
 
   if (matches.length === 0) {
@@ -2353,7 +2376,6 @@ window.joinLiveMatchById = function(matchId) {
       if (doc.exists) {
         liveMatchData = doc.data();
         renderViewerScoreboard(document.getElementById('mainContent'));
-        // Save to history
         const history = JSON.parse(localStorage.getItem(VIEW_HISTORY_KEY) || '[]');
         const exists = history.find(h => h.id === matchId);
         if (!exists) {
