@@ -37,10 +37,10 @@ let liveMatchId = null;
 let liveMatchListener = null;
 let liveRole = null;
 let liveMatchData = null;
-let tiebreakTarget = 7;
-let isTiebreak = false;
-let paymentTimerEnabled = true;
-let timerInterval = null;
+let tiebreakTarget = 7;          // default tiebreak target points
+let isTiebreak = false;          // whether current set is in tiebreak
+let paymentTimerEnabled = true;  // admin toggle for 20s reminder timer
+let timerInterval = null;        // interval for payment reminder countdown
 
 const VIEW_HISTORY_KEY = 'duketennis_view_history';
 
@@ -339,6 +339,7 @@ async function renderClientDashboard(container) {
       <div class="hero">
         <div>
           <h1>Welcome, ${escapeHtml(userProfile.username || userProfile.name)}</h1>
+          <p>Member ID: ${escapeHtml(userProfile.memberId || 'N/A')}</p>
           <p>Rolider Sports Complex · Accra</p>
           <button class="btn-primary" onclick="navigateTo('booking')">Book a Session</button>
         </div>
